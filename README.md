@@ -22,6 +22,12 @@ You may use, modify, distribute, self-host, and commercially use this software, 
 Use this path when you want the frontend, backend, and database to start together automatically.
 
 ```bash
+docker-compose up --build -d
+```
+
+Run the command exactly in that order: `--build` belongs after `up`. If your Docker installation supports the newer Compose plugin syntax, you can also use:
+
+```bash
 docker compose up --build -d
 ```
 
@@ -57,12 +63,14 @@ Defaults are ready for local use. To customize ports, database credentials, publ
 Useful commands:
 
 ```bash
-docker compose logs -f
-docker compose down
-docker compose down -v
+docker-compose logs -f
+docker-compose down
+docker-compose down -v
 ```
 
-Use `docker compose down -v` only when you want to delete the local database volume and start fresh.
+For Docker installations that support the newer Compose plugin syntax, you can replace `docker-compose` with `docker compose`.
+
+Use `docker-compose down -v` only when you want to delete the local database volume and start fresh.
 
 ### Database
 

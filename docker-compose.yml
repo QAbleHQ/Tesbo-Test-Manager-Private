@@ -1,6 +1,7 @@
 # Tesbo one-command local deployment.
 #
 # Start everything:
+#   docker-compose up --build -d
 #   docker compose up --build -d
 #
 # App URLs:
