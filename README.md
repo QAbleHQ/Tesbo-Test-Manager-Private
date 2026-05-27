@@ -17,6 +17,32 @@ You may use, modify, distribute, self-host, and commercially use this software, 
 
 ## Quick Start
 
+### Prerequisites
+
+Before starting Tesbo with Docker, install:
+
+- **Docker** - container runtime for PostgreSQL, Redis, backend, frontend, and the database migrator.
+- **Docker Compose** - multi-container runner used by `docker-compose.yml`.
+
+Recommended install paths:
+
+- **Windows/macOS:** Install Docker Desktop from the official Docker docs: https://docs.docker.com/desktop/
+- **Linux desktop:** Install Docker Desktop for Linux, or install Docker Engine from the official Docker Engine docs: https://docs.docker.com/engine/install/
+- **Compose plugin/standalone Compose:** Follow Docker's Compose install guide: https://docs.docker.com/compose/install/
+
+Verify your installation:
+
+```bash
+docker --version
+docker-compose version
+```
+
+Some newer Docker installations use the Compose plugin command instead:
+
+```bash
+docker compose version
+```
+
 ### One-Command Docker Deployment
 
 Use this path when you want the frontend, backend, and database to start together automatically.
