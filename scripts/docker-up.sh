@@ -16,8 +16,8 @@ fi
 
 echo
 echo "Tesbo is starting."
-echo "Frontend: http://localhost:3000"
-echo "Backend health: http://localhost:7000/health"
+echo "Frontend: http://localhost:1010"
+echo "Backend health: http://localhost:1011/health"
 echo
 echo "Useful commands:"
 echo "  docker compose logs -f"

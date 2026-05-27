@@ -59,8 +59,8 @@ docker compose up --build -d
 
 Then open:
 
-- Frontend: http://localhost:3000
-- Backend health: http://localhost:7000/health
+- Frontend: http://localhost:1010
+- Backend health: http://localhost:1011/health
 
 On Windows PowerShell you can also run:
 
@@ -74,13 +74,13 @@ On macOS/Linux you can run:
 sh ./scripts/docker-up.sh
 ```
 
-The stack uses a one-shot Liquibase migrator container before starting the backend, so PostgreSQL is initialized automatically.
+The stack uses a one-shot Node/TypeScript migrator container before starting the backend, so PostgreSQL is initialized automatically.
 
 The Docker stack includes:
 
 - **frontend** - Next.js production server
 - **backend** - NestJS API
-- **migrator** - one-shot Liquibase schema migrator
+- **migrator** - one-shot Node/TypeScript schema migrator
 - **postgres** - PostgreSQL database with persistent Docker volume
 - **redis** - Redis service for future/background runtime needs
 
@@ -106,7 +106,13 @@ Use your existing PostgreSQL. In `Tesbo-Backend-Nest/.env` set:
 - **DATABASE_USER** - a PostgreSQL role that exists (e.g. your OS user on Homebrew, not necessarily `postgres`)
 - **DATABASE_PASSWORD** - that role's password (empty if you use trust auth)
 
-Create a database that user can access (e.g. `createdb tesbo`), or use an existing one and set `DATABASE_URL` to that database name. Then start the backend; Liquibase will create the schema.
+Create a database that user can access (e.g. `createdb tesbo`), or use an existing one and set `DATABASE_URL` to that database name. Then run the backend migrations before starting the API:
+
+```bash
+cd Tesbo-Backend-Nest
+npm run build
+npm run migrate
+```
 
 ### Backend
 
@@ -116,7 +122,7 @@ npm install
 npm run start:dev
 ```
 
-Runs on http://localhost:7000. Health: http://localhost:7000/health
+Runs on http://localhost:7000 in local dev, or http://localhost:1011 with the default Docker Compose stack. Health: http://localhost:1011/health
 
 ### Frontend
 
@@ -126,11 +132,11 @@ npm install
 npm run dev
 ```
 
-Runs on http://localhost:3000. Set `NEXT_PUBLIC_API_URL=http://localhost:7000` if needed.
+Runs on http://localhost:3000 in local dev, or http://localhost:1010 with the default Docker Compose stack. Set `NEXT_PUBLIC_API_URL=http://localhost:1011` if needed.
 
 ### Auth
 
-1. Open http://localhost:3000 - redirects to login.
+1. Open http://localhost:1010 - redirects to login.
 2. Enter email - OTP is sent (or logged if Postmark is not configured).
 3. Enter code on verify page - signed in.
 4. Onboarding: create organization and first project - project dashboard.
@@ -138,7 +144,7 @@ Runs on http://localhost:3000. Set `NEXT_PUBLIC_API_URL=http://localhost:7000` i
 ## Project Layout
 
 - `Tesbo-Backend-Nest/` - NestJS API, auth, audit, RBAC, test cases/suites/plans/cycles/executions, bulk update, export, reporting, AI stub, notifications
-- `infra/liquibase/` - database schema migrations
+- `Tesbo-Backend-Nest/migrations/` - database schema migrations
 - `Tesbo-Frontend/` - Next.js app, login/verify/onboarding, projects, test cases, suites, plans, cycles, execution workflow, bulk actions, export
 - `deploy/` - deployment examples
 - `infra/` - infrastructure examples

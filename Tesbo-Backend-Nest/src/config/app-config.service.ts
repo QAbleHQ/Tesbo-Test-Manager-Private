@@ -19,7 +19,7 @@ export class AppConfigService {
   readonly sessionDays = this.integer("SESSION_DAYS", 30);
   readonly sessionCookieName = "tesbo_session";
   readonly corsAllowedOrigins = this.parseCorsAllowedOrigins();
-  readonly frontendUrl = this.string("FRONTEND_URL", "http://localhost:3000");
+  readonly frontendUrl = this.string("FRONTEND_URL", "http://localhost:1010");
   readonly uploadDir = this.string("UPLOAD_DIR", "./uploads");
   readonly maxUploadSize = this.integer("MAX_UPLOAD_SIZE", 10485760);
 
@@ -39,8 +39,10 @@ export class AppConfigService {
 
   private parseCorsAllowedOrigins(): Set<string> {
     const defaults = [
+      "http://localhost:1010",
       "http://localhost:3000",
       "http://localhost:3001",
+      "http://127.0.0.1:1010",
       "http://127.0.0.1:3000",
       "http://127.0.0.1:3001",
       "https://frontdoor.tesbo.io",

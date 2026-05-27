@@ -21,7 +21,7 @@ export class AdminHealthController {
     const started = Date.now();
     try {
       const migration = await this.db.query<{ id: string | null }>(
-        'SELECT id FROM databasechangelog ORDER BY dateexecuted DESC, orderexecuted DESC LIMIT 1'
+        "SELECT filename AS id FROM schema_migrations ORDER BY version DESC LIMIT 1"
       );
       services.database = {
         status: "ok",

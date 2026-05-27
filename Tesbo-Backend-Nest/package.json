@@ -5,6 +5,8 @@
   "license": "Apache-2.0",
   "scripts": {
     "build": "nest build",
+    "migrate": "node dist/database/migrate.js",
+    "migrate:dev": "ts-node src/database/migrate.ts",
     "start": "node dist/main.js",
     "start:dev": "nest start --watch",
     "lint": "eslint \"src/**/*.ts\"",

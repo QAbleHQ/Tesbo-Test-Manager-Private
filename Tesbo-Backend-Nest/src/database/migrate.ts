@@ -1,0 +1,187 @@
+import * as crypto from "crypto";
+import * as dotenv from "dotenv";
+import * as fs from "fs";
+import * as path from "path";
+import { Pool, PoolClient } from "pg";
+
+type MigrationFile = {
+  version: number;
+  name: string;
+  filename: string;
+  path: string;
+  checksum: string;
+};
+
+const MIGRATION_LOCK_KEY = 87261042;
+
+function loadEnv() {
+  const envPath = path.join(process.cwd(), ".env");
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  } else {
+    dotenv.config();
+  }
+}
+
+function normalizeDatabaseUrl(raw: string): string {
+  const value = raw.trim();
+  if (value.startsWith("jdbc:postgresql://")) return value.slice("jdbc:".length);
+  if (value.startsWith("jdbc:postgres://")) return value.slice("jdbc:".length);
+  return value;
+}
+
+function migrationsDir(): string {
+  return process.env.MIGRATIONS_DIR ?? path.join(process.cwd(), "migrations");
+}
+
+function parseMigrationFilename(filename: string): { version: number; name: string } | null {
+  const match = /^V(\d+)_(.+)\.sql$/i.exec(filename);
+  if (!match) return null;
+  return { version: Number.parseInt(match[1], 10), name: match[2] };
+}
+
+function readMigrations(): MigrationFile[] {
+  const dir = migrationsDir();
+  if (!fs.existsSync(dir)) {
+    throw new Error(`Migrations directory not found: ${dir}`);
+  }
+
+  return fs
+    .readdirSync(dir)
+    .filter((filename) => filename.toLowerCase().endsWith(".sql"))
+    .map((filename) => {
+      const parsed = parseMigrationFilename(filename);
+      if (!parsed) {
+        throw new Error(`Invalid migration filename "${filename}". Expected V<number>_<name>.sql`);
+      }
+      const filePath = path.join(dir, filename);
+      const sql = fs.readFileSync(filePath, "utf8");
+      return {
+        ...parsed,
+        filename,
+        path: filePath,
+        checksum: crypto.createHash("sha256").update(sql).digest("hex")
+      };
+    })
+    .sort((left, right) => left.version - right.version || left.filename.localeCompare(right.filename));
+}
+
+async function ensureMigrationTable(client: PoolClient) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INT PRIMARY KEY,
+      name TEXT NOT NULL,
+      filename TEXT NOT NULL UNIQUE,
+      checksum TEXT NOT NULL,
+      executed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      execution_time_ms INT NOT NULL
+    )
+  `);
+}
+
+async function bootstrapFromLegacyChangelog(client: PoolClient, migrations: MigrationFile[]) {
+  const existing = await client.query<{ count: string }>("SELECT COUNT(*) AS count FROM schema_migrations");
+  if (Number.parseInt(existing.rows[0]?.count ?? "0", 10) > 0) return;
+
+  const legacyTable = await client.query<{ exists: string | null }>("SELECT to_regclass('public.databasechangelog') AS exists");
+  if (!legacyTable.rows[0]?.exists) return;
+
+  const changelog = await client.query<{ filename: string }>(
+    "SELECT filename FROM databasechangelog ORDER BY orderexecuted ASC"
+  );
+  const appliedFilenames = new Set(changelog.rows.map((row) => path.basename(row.filename)));
+  const appliedMigrations = migrations.filter((migration) => appliedFilenames.has(migration.filename));
+
+  if (appliedMigrations.length === 0) return;
+
+  for (const migration of appliedMigrations) {
+    await client.query(
+      `INSERT INTO schema_migrations (version, name, filename, checksum, execution_time_ms)
+       VALUES ($1, $2, $3, $4, 0)
+       ON CONFLICT (version) DO NOTHING`,
+      [migration.version, migration.name, migration.filename, migration.checksum]
+    );
+  }
+  console.log(`Bootstrapped ${appliedMigrations.length} migration record(s) from the legacy changelog.`);
+}
+
+async function validateAppliedChecksums(client: PoolClient, migrations: MigrationFile[]) {
+  const applied = await client.query<{ version: number; filename: string; checksum: string }>(
+    "SELECT version, filename, checksum FROM schema_migrations"
+  );
+  const byVersion = new Map(migrations.map((migration) => [migration.version, migration]));
+
+  for (const row of applied.rows) {
+    const migration = byVersion.get(row.version);
+    if (!migration) {
+      throw new Error(`Database has unknown migration version ${row.version} (${row.filename}).`);
+    }
+    if (migration.checksum !== row.checksum) {
+      throw new Error(`Checksum mismatch for migration ${migration.filename}. Create a new migration instead of editing an applied one.`);
+    }
+  }
+}
+
+async function applyMigration(client: PoolClient, migration: MigrationFile) {
+  const sql = fs.readFileSync(migration.path, "utf8");
+  const started = Date.now();
+
+  await client.query("BEGIN");
+  try {
+    await client.query(sql);
+    await client.query(
+      `INSERT INTO schema_migrations (version, name, filename, checksum, execution_time_ms)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [migration.version, migration.name, migration.filename, migration.checksum, Date.now() - started]
+    );
+    await client.query("COMMIT");
+    console.log(`Applied ${migration.filename}`);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+}
+
+async function main() {
+  loadEnv();
+  const migrations = readMigrations();
+  const databaseUrl = normalizeDatabaseUrl(process.env.DATABASE_URL ?? "postgresql://localhost:5432/tesbo");
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    user: process.env.DATABASE_USER || undefined,
+    password: process.env.DATABASE_PASSWORD || undefined,
+    max: 1
+  });
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
+    await ensureMigrationTable(client);
+    await bootstrapFromLegacyChangelog(client, migrations);
+    await validateAppliedChecksums(client, migrations);
+
+    const applied = await client.query<{ version: number }>("SELECT version FROM schema_migrations");
+    const appliedVersions = new Set(applied.rows.map((row) => row.version));
+    const pending = migrations.filter((migration) => !appliedVersions.has(migration.version));
+
+    if (pending.length === 0) {
+      console.log("Database schema is up to date.");
+      return;
+    }
+
+    for (const migration of pending) {
+      await applyMigration(client, migration);
+    }
+    console.log(`Applied ${pending.length} migration(s).`);
+  } finally {
+    await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]).catch(() => undefined);
+    client.release();
+    await pool.end();
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+});

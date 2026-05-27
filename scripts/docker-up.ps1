@@ -21,8 +21,8 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
 
 Write-Host ""
 Write-Host "Tesbo is starting."
-Write-Host "Frontend: http://localhost:3000"
-Write-Host "Backend health: http://localhost:7000/health"
+Write-Host "Frontend: http://localhost:1010"
+Write-Host "Backend health: http://localhost:1011/health"
 Write-Host ""
 Write-Host "Useful commands:"
 Write-Host "  docker compose logs -f"
