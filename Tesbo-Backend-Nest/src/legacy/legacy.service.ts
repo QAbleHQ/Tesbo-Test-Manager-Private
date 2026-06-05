@@ -1,9 +1,32 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { randomBytes } from "crypto";
 import type { QueryResultRow } from "pg";
 import { DatabaseService } from "../database/database.service";
 
 type Body = Record<string, any>;
+
+type ZyraGenerationInput = {
+  story: string;
+  context: string;
+  acceptanceCriteria: string;
+  feedback: string;
+  knowledge: Array<{ title: string; content: string }>;
+  jira: Array<{ key: string; summary: string; description: string }>;
+  existingTestcases: Array<{ externalId: string; title: string; description: string; priority: string; status: string; stepsSummary: string }>;
+  requestedCount: number;
+};
+
+type ZyraAiUsage = {
+  input: number;
+  output: number;
+  total: number;
+  cached: number;
+};
+
+type ZyraAiResult = {
+  drafts: Body[];
+  usage: ZyraAiUsage;
+  requestId?: string;
+};
 
 function camel(key: string): string {
   return key.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -28,6 +51,48 @@ function projectKey(value: string): string {
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "")
     .slice(0, 16) || "TESBO";
+}
+
+function maskSecret(value: string): string {
+  if (!value) return "********";
+  const suffix = value.slice(-4);
+  return `${"*".repeat(Math.max(8, Math.min(16, value.length - 4)))}${suffix}`;
+}
+
+function estimateTokens(value: string): number {
+  return Math.max(1, Math.ceil(value.length / 4));
+}
+
+function normalizeJsonArray(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizeProviderModel(provider: string, model?: string | null): string {
+  const value = String(model || "").trim();
+  if (provider === "anthropic") {
+    const aliases: Record<string, string> = {
+      "": "claude-sonnet-4-20250514",
+      "claude-sonnet": "claude-sonnet-4-20250514",
+      "claude-sonnet-4": "claude-sonnet-4-20250514",
+      "claude-4-sonnet": "claude-sonnet-4-20250514",
+      "sonnet": "claude-sonnet-4-20250514",
+      "sonnet-4": "claude-sonnet-4-20250514",
+      "claude-3.5-sonnet": "claude-3-5-sonnet-20241022",
+      "claude-3-5-sonnet": "claude-3-5-sonnet-20241022",
+      "claude-3-7-sonnet": "claude-3-7-sonnet-20250219"
+    };
+    return aliases[value.toLowerCase()] || value;
+  }
+  return value || "gpt-4o";
+}
+
+function normalizeChatCompletionsUrl(baseUrl?: string | null): string {
+  const value = String(baseUrl || "").trim();
+  if (!value) return "https://api.openai.com/v1/chat/completions";
+  const trimmed = value.replace(/\/+$/, "");
+  if (trimmed.endsWith("/chat/completions")) return trimmed;
+  if (trimmed.endsWith("/v1")) return `${trimmed}/chat/completions`;
+  return `${trimmed}/v1/chat/completions`;
 }
 
 @Injectable()
@@ -127,6 +192,90 @@ export class LegacyService {
   async removeWorkspaceMember(userId: string | null | undefined, targetUserId: string) {
     const workspace = await this.workspace(userId);
     await this.db.query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2", [workspace.id, targetUserId]);
+  }
+
+  async aiKeys(userId: string | null | undefined) {
+    const workspace = await this.workspace(userId);
+    const keys = await this.db.query(
+      `SELECT id, name, provider, default_model, base_url, auth_header_name, auth_scheme,
+              is_active AS active, api_key, created_at, updated_at
+       FROM workspace_ai_keys WHERE organization_id = $1 ORDER BY created_at DESC`,
+      [workspace.id]
+    );
+    const projects = await this.db.query(
+      `SELECT p.id AS project_id, p.key AS project_key, p.name AS project_name, a.workspace_ai_key_id
+       FROM projects p
+       LEFT JOIN project_ai_key_allocations a ON a.project_id = p.id
+       WHERE p.organization_id = $1 AND p.archived_at IS NULL
+       ORDER BY p.name`,
+      [workspace.id]
+    );
+    return {
+      keys: keys.rows.map((row) => {
+        const item = toCamel(row);
+        item.maskedKey = maskSecret(String(row.api_key || ""));
+        delete item.apiKey;
+        return item;
+      }),
+      projects: projects.rows.map(toCamel)
+    };
+  }
+
+  async createAiKey(userId: string | null | undefined, body: Body) {
+    const workspace = await this.workspace(userId);
+    const name = String(body.name || "").trim();
+    const apiKey = String(body.apiKey || "").trim();
+    const provider = String(body.provider || "openai").trim().toLowerCase();
+    const baseUrl = String(body.baseUrl || "").trim() || null;
+    const authHeaderName = String(body.authHeaderName || "Authorization").trim() || "Authorization";
+    const authScheme = String(body.authScheme || "Bearer").trim();
+    if (!name) throw new BadRequestException({ error: "name is required" });
+    if (!apiKey) throw new BadRequestException({ error: "apiKey is required" });
+    if (!provider) throw new BadRequestException({ error: "provider is required" });
+    if (!["openai", "anthropic"].includes(provider) && !baseUrl) {
+      throw new BadRequestException({ error: "baseUrl is required for custom providers" });
+    }
+    const res = await this.db.query(
+      `INSERT INTO workspace_ai_keys (organization_id, name, provider, api_key, default_model, base_url, auth_header_name, auth_scheme, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (organization_id, name)
+       DO UPDATE SET provider = EXCLUDED.provider, api_key = EXCLUDED.api_key, default_model = EXCLUDED.default_model,
+                     base_url = EXCLUDED.base_url, auth_header_name = EXCLUDED.auth_header_name, auth_scheme = EXCLUDED.auth_scheme,
+                     is_active = true, updated_at = now()
+       RETURNING id, name, provider, default_model, base_url, auth_header_name, auth_scheme, is_active AS active, api_key, created_at, updated_at`,
+      [workspace.id, name, provider, apiKey, body.defaultModel || null, baseUrl, authHeaderName, authScheme, userId || null]
+    );
+    const item = toCamel(res.rows[0]);
+    item.maskedKey = maskSecret(apiKey);
+    delete item.apiKey;
+    return item;
+  }
+
+  async deleteAiKey(userId: string | null | undefined, keyId: string) {
+    const workspace = await this.workspace(userId);
+    await this.db.query("DELETE FROM workspace_ai_keys WHERE id = $1 AND organization_id = $2", [keyId, workspace.id]);
+    return { ok: true };
+  }
+
+  async allocateAiKey(userId: string | null | undefined, body: Body) {
+    const projectId = String(body.projectId || "");
+    if (!projectId) throw new BadRequestException({ error: "projectId is required" });
+    const workspace = await this.workspace(userId);
+    const project = await this.db.query("SELECT id FROM projects WHERE id = $1 AND organization_id = $2", [projectId, workspace.id]);
+    if (!project.rows[0]) throw new NotFoundException({ error: "Project not found" });
+    const keyId = body.workspaceAiKeyId || null;
+    if (keyId) {
+      const key = await this.db.query("SELECT id FROM workspace_ai_keys WHERE id = $1 AND organization_id = $2", [keyId, workspace.id]);
+      if (!key.rows[0]) throw new NotFoundException({ error: "AI key not found" });
+    }
+    await this.db.query(
+      `INSERT INTO project_ai_key_allocations (project_id, workspace_ai_key_id, allocated_by)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (project_id)
+       DO UPDATE SET workspace_ai_key_id = EXCLUDED.workspace_ai_key_id, allocated_by = EXCLUDED.allocated_by, updated_at = now()`,
+      [projectId, keyId, userId || null]
+    );
+    return { ok: true };
   }
 
   async listProjects(userId: string | null | undefined) {
@@ -431,6 +580,78 @@ export class LegacyService {
     await this.db.query("DELETE FROM plan_items WHERE id = $1", [itemId]);
   }
 
+  async planRuns(planId: string) {
+    const res = await this.db.query(
+      `SELECT c.*,
+              COUNT(ci.id)::int AS total_cases,
+              COUNT(*) FILTER (WHERE e.status = 'Passed')::int AS passed,
+              COUNT(*) FILTER (WHERE e.status = 'Failed')::int AS failed,
+              COUNT(*) FILTER (WHERE e.status = 'Blocked')::int AS blocked,
+              COUNT(*) FILTER (WHERE e.status = 'Skipped')::int AS skipped,
+              COUNT(*) FILTER (WHERE e.status IS NULL OR e.status = 'Untested')::int AS untested
+       FROM cycles c
+       LEFT JOIN cycle_items ci ON ci.cycle_id = c.id
+       LEFT JOIN executions e ON e.cycle_item_id = ci.id
+       WHERE c.plan_id = $1
+       GROUP BY c.id
+       ORDER BY c.created_at DESC`,
+      [planId]
+    );
+    return res.rows.map(toCamel);
+  }
+
+  async planProgress(planId: string) {
+    const res = await this.db.query<{
+      run_count: number;
+      total_cases: number;
+      passed: number;
+      failed: number;
+      blocked: number;
+      skipped: number;
+      untested: number;
+    }>(
+      `SELECT COUNT(DISTINCT c.id)::int AS run_count,
+              COUNT(ci.id)::int AS total_cases,
+              COUNT(*) FILTER (WHERE e.status = 'Passed')::int AS passed,
+              COUNT(*) FILTER (WHERE e.status = 'Failed')::int AS failed,
+              COUNT(*) FILTER (WHERE e.status = 'Blocked')::int AS blocked,
+              COUNT(*) FILTER (WHERE e.status = 'Skipped')::int AS skipped,
+              COUNT(*) FILTER (WHERE e.status IS NULL OR e.status = 'Untested')::int AS untested
+       FROM cycles c
+       LEFT JOIN cycle_items ci ON ci.cycle_id = c.id
+       LEFT JOIN executions e ON e.cycle_item_id = ci.id
+       WHERE c.plan_id = $1`,
+      [planId]
+    );
+    const row = res.rows[0] ?? {
+      run_count: 0,
+      total_cases: 0,
+      passed: 0,
+      failed: 0,
+      blocked: 0,
+      skipped: 0,
+      untested: 0
+    };
+    const totalCases = Number(row.total_cases) || 0;
+    const passed = Number(row.passed) || 0;
+    const failed = Number(row.failed) || 0;
+    const blocked = Number(row.blocked) || 0;
+    const skipped = Number(row.skipped) || 0;
+    const untested = Number(row.untested) || 0;
+    const executed = passed + failed + blocked + skipped;
+    return {
+      runCount: Number(row.run_count) || 0,
+      totalCases,
+      passed,
+      failed,
+      blocked,
+      skipped,
+      untested,
+      executed,
+      completionPercent: totalCases > 0 ? Math.round((executed / totalCases) * 100) : 0
+    };
+  }
+
   async listCycles(projectId: string) {
     const res = await this.db.query("SELECT * FROM cycles WHERE project_id = $1 ORDER BY created_at DESC", [projectId]);
     return res.rows.map(toCamel);
@@ -464,8 +685,21 @@ export class LegacyService {
     await this.db.query(
       `UPDATE cycles SET name=COALESCE($2,name), description=COALESCE($3,description),
        environment=COALESCE($4,environment), build_version=COALESCE($5,build_version),
-       release_name=COALESCE($6,release_name), updated_at=now() WHERE id=$1`,
-      [cycleId, body.name || null, body.description || null, body.environment || null, body.buildVersion || null, body.releaseName || null]
+       release_name=COALESCE($6,release_name),
+       plan_id=CASE WHEN $7::boolean THEN NULL WHEN $8::uuid IS NOT NULL THEN $8::uuid ELSE plan_id END,
+       status=COALESCE($9,status),
+       updated_at=now() WHERE id=$1`,
+      [
+        cycleId,
+        body.name || null,
+        body.description || null,
+        body.environment || null,
+        body.buildVersion || null,
+        body.releaseName || null,
+        body.clearPlan === true,
+        body.planId || null,
+        body.status || null
+      ]
     );
   }
 
@@ -710,13 +944,779 @@ export class LegacyService {
     return { connected: false, connectedProjects: [] };
   }
 
-  async aiGenerate() {
+  async zyraAgent(projectId: string) {
+    const [project, allocation, usage, tasks] = await Promise.all([
+      this.getProject(projectId),
+      this.db.query(
+        `SELECT k.id, k.name, k.provider, k.default_model, k.base_url, k.auth_header_name, k.auth_scheme, k.is_active, k.api_key
+         FROM project_ai_key_allocations a
+         JOIN workspace_ai_keys k ON k.id = a.workspace_ai_key_id
+         WHERE a.project_id = $1 AND k.is_active = true`,
+        [projectId]
+      ),
+      this.db.query<{ total: string }>(
+        "SELECT COALESCE(SUM(token_total), 0) AS total FROM ai_generation_requests WHERE project_id = $1 AND agent_name = 'Zyra the Edge Hunter'",
+        [projectId]
+      ),
+      this.db.query(
+        `SELECT id, requested_by, provider, model, user_story, acceptance_criteria, custom_prompt, style,
+                requested_count, generated_count, generated_payload, saved_count, save_events, created_at, updated_at,
+                agent_name, task_status, feedback, context, jira_issue_keys, token_input, token_output, token_total,
+                source_summary, activity_log
+         FROM ai_generation_requests
+         WHERE project_id = $1 AND agent_name = 'Zyra the Edge Hunter'
+         ORDER BY updated_at DESC LIMIT 50`,
+        [projectId]
+      )
+    ]);
+    const settings = this.parseProjectSettings(project.settings).zyraAgent || {};
+    const key = allocation.rows[0];
     return {
-      generationRequestId: randomBytes(16).toString("hex"),
-      provider: "openai",
-      drafts: [],
-      generatedCount: 0
+      agent: {
+        name: "Zyra the Edge Hunter",
+        role: "AI testcase generation agent",
+        active: Boolean(key),
+        activationReason: key ? "Workspace AI key allocated to this project." : "Add and allocate an OpenAI or Claude key to activate Zyra."
+      },
+      settings: {
+        testcaseCount: Number(settings.testcaseCount || 5)
+      },
+      aiKey: key
+        ? {
+            id: key.id,
+            name: key.name,
+            provider: key.provider,
+            defaultModel: key.default_model,
+            baseUrl: key.base_url,
+            authHeaderName: key.auth_header_name,
+            authScheme: key.auth_scheme,
+            maskedKey: maskSecret(String(key.api_key || ""))
+          }
+        : null,
+      tokenUsage: {
+        total: Number(usage.rows[0]?.total || 0)
+      },
+      tasks: tasks.rows.map((row) => this.formatAiTask(row))
     };
+  }
+
+  async zyraTask(projectId: string, taskId: string) {
+    const res = await this.db.query(
+      `SELECT id, requested_by, provider, model, user_story, acceptance_criteria, custom_prompt, style,
+              requested_count, generated_count, generated_payload, saved_count, save_events, created_at, updated_at,
+              agent_name, task_status, feedback, context, jira_issue_keys, token_input, token_output, token_total,
+              source_summary, activity_log
+       FROM ai_generation_requests
+       WHERE id = $1 AND project_id = $2 AND agent_name = 'Zyra the Edge Hunter'`,
+      [taskId, projectId]
+    );
+    if (!res.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    return this.formatAiTask(res.rows[0]);
+  }
+
+  async updateZyraSettings(projectId: string, body: Body) {
+    const count = Math.max(1, Math.min(50, Number(body.testcaseCount || 5)));
+    const project = await this.getProject(projectId);
+    const settings = this.parseProjectSettings(project.settings);
+    settings.zyraAgent = { ...(settings.zyraAgent || {}), testcaseCount: count };
+    await this.db.query("UPDATE projects SET settings = $2::jsonb, updated_at = now() WHERE id = $1", [projectId, JSON.stringify(settings)]);
+    return { testcaseCount: count };
+  }
+
+  async aiGenerate(projectId: string, userId: string | null | undefined, body: Body) {
+    const uid = this.requireUser(userId);
+    const allocation = await this.db.query(
+      `SELECT k.provider, k.default_model, k.api_key, k.base_url, k.auth_header_name, k.auth_scheme
+       FROM project_ai_key_allocations a
+       JOIN workspace_ai_keys k ON k.id = a.workspace_ai_key_id
+       WHERE a.project_id = $1 AND k.is_active = true`,
+      [projectId]
+    );
+    if (!allocation.rows[0]) throw new BadRequestException({ error: "Zyra is inactive. Allocate an OpenAI or Claude key to this project first." });
+    const provider = String(body.provider || allocation.rows[0].provider || "openai").toLowerCase();
+    const model = normalizeProviderModel(provider, body.model || allocation.rows[0].default_model);
+    const project = await this.getProject(projectId);
+    const settings = this.parseProjectSettings(project.settings).zyraAgent || {};
+    const requestedCount = Math.max(1, Math.min(50, Number(body.count || settings.testcaseCount || 5)));
+    const story = String(body.userStory || body.story || "").trim();
+    const context = String(body.context || body.prompt || "").trim();
+    const acceptanceCriteria = String(body.acceptanceCriteria || "").trim();
+    if (!story) throw new BadRequestException({ error: "story is required" });
+    const jiraIssueKeys = normalizeJsonArray(body.jiraIssueKeys).map(String);
+    const knowledgeItemIds = normalizeJsonArray(body.knowledgeItemIds).map(String).filter(Boolean);
+    const knowledge = await this.knowledgeSnapshot(projectId, knowledgeItemIds);
+    const jira = await this.jiraSnapshot(projectId, jiraIssueKeys);
+    const existingTestcases = await this.existingTestcaseSnapshot(projectId, story, context);
+    const feedback = String(body.feedback || "").trim();
+    const aiResult = await this.generateZyraWithProvider({
+      provider,
+      model,
+      apiKey: allocation.rows[0].api_key,
+      baseUrl: allocation.rows[0].base_url,
+      authHeaderName: allocation.rows[0].auth_header_name,
+      authScheme: allocation.rows[0].auth_scheme,
+      projectId,
+      input: { story, context, acceptanceCriteria, feedback, knowledge, jira, existingTestcases, requestedCount }
+    });
+    const drafts = aiResult.drafts;
+    const inputText = [
+      story,
+      context,
+      acceptanceCriteria,
+      feedback,
+      knowledge.map((item) => `${item.title}\n${item.content}`).join("\n"),
+      jira.map((t) => `${t.key} ${t.summary}`).join("\n"),
+      existingTestcases.map((tc) => `${tc.externalId} ${tc.title} ${tc.description}`).join("\n")
+    ].join("\n");
+    const tokenInput = aiResult.usage.input || estimateTokens(inputText);
+    const tokenOutput = aiResult.usage.output || estimateTokens(JSON.stringify(drafts));
+    const sourceSummary = [
+      { type: "story", title: "User story", detail: story.slice(0, 320) },
+      ...(context ? [{ type: "context", title: "User context", detail: context.slice(0, 320) }] : []),
+      ...knowledge.map((item) => ({ type: "knowledge_base", title: item.title, detail: item.content.slice(0, 320) })),
+      ...jira.map((item) => ({ type: "jira", title: item.key, detail: `${item.summary} ${item.description}`.trim().slice(0, 320) })),
+      ...existingTestcases.map((item) => ({ type: "existing_testcase", title: `${item.externalId} ${item.title}`, detail: item.description.slice(0, 320) }))
+    ];
+    const now = new Date().toISOString();
+    const activityLog = [
+      { actor: "user", stage: "todo", title: "Task allocated", detail: story, createdAt: now },
+      { actor: "agent", stage: "in_progress", title: "Read available sources", detail: `Considered ${knowledge.length} knowledge-base item(s), ${jira.length} Jira ticket(s), ${existingTestcases.length} existing testcase(s), Zyra memory, and the supplied story/context.`, createdAt: now },
+      { actor: "agent", stage: "in_progress", title: "Generation plan", detail: this.zyraThinking({ story, context, acceptanceCriteria, feedback, knowledgeCount: knowledge.length, jiraCount: jira.length }), createdAt: now },
+      { actor: "agent", stage: "in_review", title: "Generated testcase drafts", detail: `Generated ${drafts.length} testcase draft(s) with ${provider}${aiResult.requestId ? ` request ${aiResult.requestId}` : ""}. Cached input tokens: ${aiResult.usage.cached}.`, createdAt: now }
+    ];
+    const res = await this.db.query(
+      `INSERT INTO ai_generation_requests
+       (project_id, requested_by, provider, model, user_story, acceptance_criteria, custom_prompt, requested_count,
+        generated_count, generated_payload, agent_name, task_status, feedback, context, jira_issue_keys,
+        token_input, token_output, token_total, source_summary, activity_log)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'Zyra the Edge Hunter','in_review',$11,$12,$13::jsonb,$14,$15,$16,$17::jsonb,$18::jsonb)
+       RETURNING *`,
+      [
+        projectId,
+        uid,
+        provider,
+        model,
+        story,
+        acceptanceCriteria,
+        context,
+        requestedCount,
+        drafts.length,
+        JSON.stringify(drafts),
+        feedback,
+        context,
+        JSON.stringify(jiraIssueKeys),
+        tokenInput,
+        tokenOutput,
+        tokenInput + tokenOutput,
+        JSON.stringify(sourceSummary),
+        JSON.stringify(activityLog)
+      ]
+    );
+    await this.rememberZyraMemory(projectId, uid, [
+      `Task: ${story}`,
+      `Generated ${drafts.length} testcase draft(s).`,
+      `Sources considered: ${knowledge.length} knowledge-base item(s), ${jira.length} Jira ticket(s).`,
+      `Coverage plan: ${this.zyraThinking({ story, context, acceptanceCriteria, feedback, knowledgeCount: knowledge.length, jiraCount: jira.length })}`
+    ].join("\n"));
+    return {
+      generationRequestId: res.rows[0].id,
+      task: this.formatAiTask(res.rows[0]),
+      provider,
+      drafts,
+      generatedCount: drafts.length,
+      tokenUsage: { input: tokenInput, output: tokenOutput, total: tokenInput + tokenOutput }
+    };
+  }
+
+  async aiHistory(projectId: string, query: Body) {
+    const limit = Math.min(Number(query.limit || 50), 100);
+    const offset = Number(query.offset || 0);
+    const res = await this.db.query(
+      `SELECT * FROM ai_generation_requests WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+      [projectId, limit, offset]
+    );
+    return { list: res.rows.map(toCamel) };
+  }
+
+  async aiSave(projectId: string, requestId: string, body: Body) {
+    const savedAt = new Date().toISOString();
+    const events = [{ suiteId: body.suiteId || null, testcaseIds: body.testcaseIds || [], savedAt }];
+    const activity = [{
+      actor: "user",
+      stage: "done",
+      title: "Accepted and saved testcases",
+      detail: `Saved ${Array.isArray(body.testcaseIds) ? body.testcaseIds.length : 0} testcase(s).`,
+      createdAt: savedAt
+    }];
+    await this.db.query(
+      `UPDATE ai_generation_requests
+       SET saved_count = saved_count + $3, save_events = save_events || $4::jsonb,
+           activity_log = activity_log || $5::jsonb, task_status = 'done', updated_at = now()
+       WHERE id = $1 AND project_id = $2`,
+      [requestId, projectId, Array.isArray(body.testcaseIds) ? body.testcaseIds.length : 0, JSON.stringify(events), JSON.stringify(activity)]
+    );
+  }
+
+  async zyraFeedback(projectId: string, userId: string | null | undefined, taskId: string, body: Body) {
+    const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+    if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    const uid = this.requireUser(userId);
+    const feedbackText = String(body.feedback || "").trim();
+    const referenceNote = String(body.referenceNote || "").trim();
+    const additionalJiraIssueKeys = normalizeJsonArray(body.jiraIssueKeys).map(String).filter(Boolean);
+    const feedback = [
+      feedbackText,
+      referenceNote ? `Referenced docs or tickets for knowledge base:\n${referenceNote}` : ""
+    ].filter(Boolean).join("\n\n");
+    if (!feedback) throw new BadRequestException({ error: "feedback is required" });
+    const allocation = await this.db.query(
+      `SELECT k.provider, k.default_model, k.api_key, k.base_url, k.auth_header_name, k.auth_scheme
+       FROM project_ai_key_allocations a
+       JOIN workspace_ai_keys k ON k.id = a.workspace_ai_key_id
+       WHERE a.project_id = $1 AND k.is_active = true`,
+      [projectId]
+    );
+    if (!allocation.rows[0]) throw new BadRequestException({ error: "Zyra is inactive. Allocate an OpenAI or Claude key to this project first." });
+    const feedbackActivity = [{
+      actor: "user",
+      stage: "todo",
+      title: "Review feedback submitted",
+      detail: [
+        feedbackText,
+        referenceNote ? `References: ${referenceNote}` : "",
+        additionalJiraIssueKeys.length ? `Jira tickets: ${additionalJiraIssueKeys.join(", ")}` : ""
+      ].filter(Boolean).join("\n"),
+      createdAt: new Date().toISOString()
+    }];
+    await this.db.query(
+      "UPDATE ai_generation_requests SET task_status = 'todo', feedback = $3, activity_log = activity_log || $4::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
+      [taskId, projectId, feedback, JSON.stringify(feedbackActivity)]
+    );
+    const story = existing.rows[0].user_story;
+    const context = existing.rows[0].context || existing.rows[0].custom_prompt || "";
+    const acceptanceCriteria = existing.rows[0].acceptance_criteria || "";
+    const jiraIssueKeys = Array.from(new Set([...normalizeJsonArray(existing.rows[0].jira_issue_keys).map(String), ...additionalJiraIssueKeys]));
+    const requestedCount = Number(existing.rows[0].requested_count || 5);
+    const provider = String(existing.rows[0].provider || allocation.rows[0].provider || "openai").toLowerCase();
+    const model = normalizeProviderModel(provider, existing.rows[0].model || allocation.rows[0].default_model);
+    const knowledge = await this.knowledgeSnapshot(projectId);
+    const jira = await this.jiraSnapshot(projectId, jiraIssueKeys);
+    const existingTestcases = await this.existingTestcaseSnapshot(projectId, story, context);
+    const aiResult = await this.generateZyraWithProvider({
+      provider,
+      model,
+      apiKey: allocation.rows[0].api_key,
+      baseUrl: allocation.rows[0].base_url,
+      authHeaderName: allocation.rows[0].auth_header_name,
+      authScheme: allocation.rows[0].auth_scheme,
+      projectId,
+      input: { story, context, acceptanceCriteria, feedback, knowledge, jira, existingTestcases, requestedCount }
+    });
+    const now = new Date().toISOString();
+    const activity = [
+      { actor: "agent", stage: "in_progress", title: "Moved task back to Todo", detail: "Zyra queued the task again after reviewer feedback.", createdAt: now },
+      { actor: "agent", stage: "in_progress", title: "Re-read sources with feedback", detail: `Reused the same task and applied feedback against ${knowledge.length} knowledge-base item(s), ${jira.length} Jira ticket(s), ${existingTestcases.length} existing testcase(s), Zyra memory, and ${referenceNote ? "the referenced docs/tickets" : "the existing context"}.`, createdAt: now },
+      { actor: "agent", stage: "in_review", title: "Regenerated testcase drafts", detail: `Updated this task with ${aiResult.drafts.length} regenerated draft(s). Cached input tokens: ${aiResult.usage.cached}.`, createdAt: now }
+    ];
+    const previousSources = normalizeJsonArray(existing.rows[0].source_summary);
+    const nextSources = [
+      ...previousSources,
+      ...(referenceNote ? [{ type: "feedback_reference", title: "Reviewer reference", detail: referenceNote.slice(0, 320) }] : []),
+      ...additionalJiraIssueKeys.map((key) => ({ type: "jira", title: key, detail: "Referenced by reviewer feedback." })),
+      ...existingTestcases.map((item) => ({ type: "existing_testcase", title: `${item.externalId} ${item.title}`, detail: item.description.slice(0, 320) }))
+    ];
+    const res = await this.db.query(
+      `UPDATE ai_generation_requests
+       SET generated_count = $3, generated_payload = $4::jsonb, feedback = $5,
+           token_input = token_input + $6, token_output = token_output + $7, token_total = token_total + $8,
+           activity_log = activity_log || $9::jsonb, source_summary = $10::jsonb, jira_issue_keys = $11::jsonb,
+           task_status = 'in_review', updated_at = now()
+       WHERE id = $1 AND project_id = $2
+       RETURNING *`,
+      [
+        taskId,
+        projectId,
+        aiResult.drafts.length,
+        JSON.stringify(aiResult.drafts),
+        feedback,
+        aiResult.usage.input,
+        aiResult.usage.output,
+        aiResult.usage.total,
+        JSON.stringify(activity),
+        JSON.stringify(nextSources),
+        JSON.stringify(jiraIssueKeys)
+      ]
+    );
+    await this.rememberZyraMemory(projectId, uid, [
+      `Task: ${story}`,
+      `Feedback applied: ${feedbackText}`,
+      referenceNote ? `Reviewer references: ${referenceNote}` : "",
+      additionalJiraIssueKeys.length ? `Jira references: ${additionalJiraIssueKeys.join(", ")}` : "",
+      `Regenerated ${aiResult.drafts.length} testcase draft(s).`
+    ].filter(Boolean).join("\n"));
+    return {
+      generationRequestId: taskId,
+      task: this.formatAiTask(res.rows[0]),
+      provider,
+      drafts: aiResult.drafts,
+      generatedCount: aiResult.drafts.length,
+      tokenUsage: aiResult.usage
+    };
+  }
+
+  async zyraDeleteDraft(projectId: string, taskId: string, draftIndex: number) {
+    const existing = await this.db.query("SELECT generated_payload FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+    if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
+    if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
+      throw new BadRequestException({ error: "Invalid testcase draft index" });
+    }
+    const [removed] = drafts.splice(draftIndex, 1);
+    const now = new Date().toISOString();
+    const activity = [{
+      actor: "user",
+      stage: "in_review",
+      title: "Deleted testcase draft",
+      detail: String(removed?.title || `Draft ${draftIndex + 1}`),
+      createdAt: now
+    }];
+    const res = await this.db.query(
+      `UPDATE ai_generation_requests
+       SET generated_payload = $3::jsonb, generated_count = $4,
+           activity_log = activity_log || $5::jsonb, updated_at = now()
+       WHERE id = $1 AND project_id = $2
+       RETURNING *`,
+      [taskId, projectId, JSON.stringify(drafts), drafts.length, JSON.stringify(activity)]
+    );
+    return this.formatAiTask(res.rows[0]);
+  }
+
+  async zyraCloseTask(projectId: string, taskId: string) {
+    const existing = await this.db.query("SELECT id, task_status FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+    if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    const now = new Date().toISOString();
+    const activity = [{
+      actor: "user",
+      stage: "done",
+      title: "Closed task",
+      detail: "Task closed from review without saving additional testcase drafts.",
+      createdAt: now
+    }];
+    const res = await this.db.query(
+      `UPDATE ai_generation_requests
+       SET task_status = 'done', activity_log = activity_log || $3::jsonb, updated_at = now()
+       WHERE id = $1 AND project_id = $2
+       RETURNING *`,
+      [taskId, projectId, JSON.stringify(activity)]
+    );
+    return this.formatAiTask(res.rows[0]);
+  }
+
+  async zyraSave(projectId: string, taskId: string, body: Body) {
+    const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+    if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    let suiteId = body.suiteId || null;
+    if (!suiteId && body.suiteName) {
+      const suite = await this.createSuite(projectId, { name: body.suiteName });
+      suiteId = (suite as Body).id;
+    }
+    const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
+    const selectedIndexes = normalizeJsonArray(body.selectedDraftIndexes).map(Number);
+    const selected = selectedIndexes.length ? selectedIndexes.map((index) => drafts[index]).filter(Boolean) : drafts;
+    const created = [];
+    for (const draft of selected) {
+      const testcase = await this.createTestCase(projectId, {
+        suiteId,
+        title: draft.title,
+        description: draft.expectedSummary || "",
+        preconditions: draft.preconditions || "",
+        stepsJson: this.safeSteps(draft.stepsJson),
+        priority: draft.priority || "P2",
+        type: "Functional",
+        status: "Draft",
+        automationTags: Array.isArray(draft.tags) ? draft.tags.join(",") : null
+      });
+      created.push(testcase);
+    }
+    await this.aiSave(projectId, taskId, { suiteId, testcaseIds: created.map((item) => item.id) });
+    return { savedCount: created.length, suiteId, testcases: created };
+  }
+
+  private parseProjectSettings(raw: unknown): Body {
+    if (!raw) return {};
+    if (typeof raw === "object") return raw as Body;
+    if (typeof raw !== "string") return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private async rememberZyraMemory(projectId: string, userId: string | null, entry: string) {
+    const title = "Zyra AI Memory";
+    const existing = await this.db.query<{ id: string; content: string }>(
+      "SELECT id, content FROM knowledge_base_items WHERE project_id = $1 AND item_type = 'note' AND title = $2 ORDER BY updated_at DESC LIMIT 1",
+      [projectId, title]
+    );
+    const stampedEntry = `## ${new Date().toISOString()}\n${entry.trim()}`.slice(0, 2500);
+    if (existing.rows[0]) {
+      const content = [stampedEntry, String(existing.rows[0].content || "")].filter(Boolean).join("\n\n").slice(0, 20000);
+      await this.db.query("UPDATE knowledge_base_items SET content = $2, updated_at = now() WHERE id = $1", [existing.rows[0].id, content]);
+      return;
+    }
+    await this.db.query(
+      "INSERT INTO knowledge_base_items (project_id, item_type, title, content, created_by) VALUES ($1, 'note', $2, $3, $4)",
+      [projectId, title, stampedEntry, userId]
+    );
+  }
+
+  private async knowledgeSnapshot(projectId: string, selectedItemIds: string[] = []): Promise<Array<{ title: string; content: string }>> {
+    const selected = Array.from(new Set(selectedItemIds.filter(Boolean)));
+    const values: any[] = [projectId];
+    let filter = "project_id = $1";
+    if (selected.length) {
+      values.push(selected);
+      filter += ` AND (id = ANY($${values.length}::uuid[]) OR title = 'Zyra AI Memory')`;
+    }
+    const res = await this.db.query(
+      `SELECT title, item_type, content, file_name FROM knowledge_base_items
+       WHERE ${filter}
+       ORDER BY CASE WHEN title = 'Zyra AI Memory' THEN 0 ELSE 1 END, updated_at DESC
+       LIMIT 12`,
+      values
+    );
+    return res.rows.map((row) => ({
+      title: row.title || row.file_name || "Knowledge base item",
+      content: String(row.content || row.file_name || `${row.item_type || "knowledge"} item`).slice(0, 1500)
+    }));
+  }
+
+  private async existingTestcaseSnapshot(
+    projectId: string,
+    story: string,
+    context: string
+  ): Promise<Array<{ externalId: string; title: string; description: string; priority: string; status: string; stepsSummary: string }>> {
+    const searchText = [story, context].join(" ").toLowerCase();
+    const terms = Array.from(new Set(searchText.split(/[^a-z0-9]+/).filter((word) => word.length > 3))).slice(0, 8);
+    const values: any[] = [projectId];
+    let orderBy = "updated_at DESC";
+    if (terms.length) {
+      values.push(terms.map((term) => `%${term}%`));
+      orderBy = `CASE WHEN lower(title) LIKE ANY($2::text[]) OR lower(coalesce(description, '')) LIKE ANY($2::text[]) THEN 0 ELSE 1 END, updated_at DESC`;
+    }
+    const res = await this.db.query(
+      `SELECT external_id, title, description, priority, status, steps
+       FROM testcases
+       WHERE project_id = $1
+       ORDER BY ${orderBy}
+       LIMIT 25`,
+      values
+    );
+    return res.rows.map((row) => ({
+      externalId: row.external_id || "",
+      title: String(row.title || "Untitled testcase").slice(0, 240),
+      description: String(row.description || "").slice(0, 500),
+      priority: String(row.priority || "P2"),
+      status: String(row.status || "Draft"),
+      stepsSummary: JSON.stringify(normalizeJsonArray(row.steps)).slice(0, 800)
+    }));
+  }
+
+  private async jiraSnapshot(projectId: string, keys: string[]): Promise<Array<{ key: string; summary: string; description: string }>> {
+    if (!keys.length) return [];
+    const res = await this.db.query(
+      `SELECT jira_issue_key, summary, description FROM jira_tickets
+       WHERE project_id = $1 AND jira_issue_key = ANY($2::text[])`,
+      [projectId, keys]
+    ).catch(() => ({ rows: [] as any[] }));
+    return res.rows.map((row) => ({
+      key: row.jira_issue_key,
+      summary: row.summary || "",
+      description: row.description || ""
+    }));
+  }
+
+  private async generateZyraWithProvider(params: {
+    provider: string;
+    model: string;
+    apiKey: string;
+    baseUrl?: string | null;
+    authHeaderName?: string | null;
+    authScheme?: string | null;
+    projectId: string;
+    input: ZyraGenerationInput;
+  }): Promise<ZyraAiResult> {
+    const provider = String(params.provider || "openai").toLowerCase();
+    if (provider === "anthropic") return this.generateZyraWithAnthropic(params);
+    return this.generateZyraWithOpenAi(params);
+  }
+
+  private zyraSystemPrompt(): string {
+    return [
+      "You are Zyra the Edge Hunter, an AI testcase generation agent.",
+      "Generate practical, detailed QA testcases from the supplied product story, user context, Jira tickets, knowledge-base sources, Zyra memory, and existing testcase repository context.",
+      "Review existing testcases before generating. Do not duplicate existing coverage; instead fill gaps, deepen weak coverage, or create clearly distinct edge cases.",
+      "Prioritize edge cases, boundary values, negative paths, permissions, data integrity, state transitions, and traceability.",
+      "Return only valid JSON matching this shape: {\"drafts\":[{\"title\":\"\",\"preconditions\":\"\",\"stepsJson\":\"[]\",\"expectedSummary\":\"\",\"priority\":\"P1|P2|P3\",\"tags\":[\"\"]}]}",
+      "stepsJson must be a JSON string containing an array of step objects with step, action, and expected fields."
+    ].join("\n");
+  }
+
+  private zyraStaticSourcePrompt(input: ZyraGenerationInput): string {
+    const knowledge = input.knowledge.length
+      ? input.knowledge.map((item, index) => `KB ${index + 1}: ${item.title}\n${item.content}`).join("\n\n")
+      : "No knowledge-base notes were available.";
+    const jira = input.jira.length
+      ? input.jira.map((item) => `${item.key}: ${item.summary}\n${item.description}`).join("\n\n")
+      : "No Jira tickets were selected.";
+    const existingTestcases = input.existingTestcases.length
+      ? input.existingTestcases.map((item) => `${item.externalId}: ${item.title}\nPriority: ${item.priority}; Status: ${item.status}\n${item.description}\nSteps: ${item.stepsSummary}`).join("\n\n")
+      : "No existing testcases were available.";
+    return [
+      "Static project sources for prompt caching:",
+      "Knowledge base:",
+      knowledge,
+      "Jira tickets:",
+      jira,
+      "Existing testcases to review for context and duplicate avoidance:",
+      existingTestcases
+    ].join("\n\n");
+  }
+
+  private zyraDynamicTaskPrompt(input: ZyraGenerationInput): string {
+    return [
+      `Generate exactly ${input.requestedCount} testcase drafts.`,
+      `Story:\n${input.story}`,
+      input.acceptanceCriteria ? `Acceptance criteria:\n${input.acceptanceCriteria}` : "",
+      input.context ? `User context:\n${input.context}` : "",
+      input.feedback ? `Reviewer feedback to apply to this same task:\n${input.feedback}` : "",
+      "For every draft, use the selected knowledge, Jira context, Zyra memory, and existing testcase repository context.",
+      "Make sure every draft is specific, detailed, testable, and not a duplicate of existing testcases or another generated draft."
+    ].filter(Boolean).join("\n\n");
+  }
+
+  private normalizeAiDrafts(raw: unknown, requestedCount: number): Body[] {
+    let parsed: unknown;
+    try {
+      const text = typeof raw === "string" ? raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim() : raw;
+      parsed = typeof text === "string" ? JSON.parse(text) : text;
+    } catch {
+      throw new BadRequestException({ error: "AI testcase generation returned invalid JSON" });
+    }
+    const candidates = Array.isArray(parsed) ? parsed : normalizeJsonArray((parsed as Body)?.drafts);
+    if (!candidates.length) throw new BadRequestException({ error: "AI testcase generation returned no testcase drafts" });
+    return candidates.slice(0, requestedCount).map((item, index) => {
+      const draft = item as Body;
+      const tags = Array.isArray(draft.tags) ? draft.tags.map(String) : ["zyra"];
+      return {
+        title: String(draft.title || `Generated testcase ${index + 1}`).slice(0, 240),
+        preconditions: String(draft.preconditions || "Required test data and user permissions are available."),
+        stepsJson: typeof draft.stepsJson === "string" ? draft.stepsJson : JSON.stringify(draft.steps || []),
+        expectedSummary: String(draft.expectedSummary || draft.expected || "The workflow behaves as expected."),
+        priority: String(draft.priority || (index < 2 ? "P1" : "P2")),
+        tags
+      };
+    });
+  }
+
+  private async generateZyraWithOpenAi(params: {
+    provider: string;
+    model: string;
+    apiKey: string;
+    baseUrl?: string | null;
+    authHeaderName?: string | null;
+    authScheme?: string | null;
+    projectId: string;
+    input: ZyraGenerationInput;
+  }): Promise<ZyraAiResult> {
+    const openAiBody: Body = {
+      model: params.model || "gpt-4o",
+      messages: [
+        { role: "system", content: this.zyraSystemPrompt() },
+        { role: "user", content: this.zyraStaticSourcePrompt(params.input) },
+        { role: "user", content: this.zyraDynamicTaskPrompt(params.input) }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.2
+    };
+    if (params.provider === "openai") {
+      openAiBody.prompt_cache_key = `zyra:${params.projectId}`;
+    }
+    if (params.provider === "openai" && /^(gpt-5|gpt-4\.1)/.test(String(openAiBody.model))) {
+      openAiBody.prompt_cache_retention = "24h";
+    }
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const authHeaderName = params.authHeaderName || "Authorization";
+    const authScheme = params.authScheme == null ? "Bearer" : String(params.authScheme);
+    headers[authHeaderName] = authScheme ? `${authScheme} ${params.apiKey}` : params.apiKey;
+    const response = await fetch(normalizeChatCompletionsUrl(params.provider === "openai" ? null : params.baseUrl), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(openAiBody)
+    });
+    const body = await response.json().catch(() => ({} as Body)) as Body;
+    if (!response.ok) {
+      const message = body.error?.message || body.error || response.statusText;
+      throw new BadRequestException({ error: `${params.provider === "openai" ? "OpenAI" : params.provider} testcase generation failed`, detail: String(message) });
+    }
+    const content = body.choices?.[0]?.message?.content;
+    const usage = body.usage || {};
+    return {
+      drafts: this.normalizeAiDrafts(content, params.input.requestedCount),
+      usage: {
+        input: Number(usage.prompt_tokens || 0),
+        output: Number(usage.completion_tokens || 0),
+        total: Number(usage.total_tokens || 0),
+        cached: Number(usage.prompt_tokens_details?.cached_tokens || 0)
+      },
+      requestId: response.headers.get("x-request-id") || undefined
+    };
+  }
+
+  private async generateZyraWithAnthropic(params: {
+    provider: string;
+    model: string;
+    apiKey: string;
+    baseUrl?: string | null;
+    authHeaderName?: string | null;
+    authScheme?: string | null;
+    projectId: string;
+    input: ZyraGenerationInput;
+  }): Promise<ZyraAiResult> {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": params.apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: normalizeProviderModel("anthropic", params.model),
+        max_tokens: 4000,
+        temperature: 0.2,
+        system: [
+          {
+            type: "text",
+            text: `${this.zyraSystemPrompt()}\n\n${this.zyraStaticSourcePrompt(params.input)}`,
+            cache_control: { type: "ephemeral" }
+          }
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: this.zyraDynamicTaskPrompt(params.input) }]
+          }
+        ]
+      })
+    });
+    const body = await response.json().catch(() => ({} as Body)) as Body;
+    if (!response.ok) {
+      const message = body.error?.message || body.error || response.statusText;
+      throw new BadRequestException({ error: "Claude testcase generation failed", detail: String(message) });
+    }
+    const content = normalizeJsonArray(body.content).map((item) => item?.text || "").join("\n").trim();
+    const usage = body.usage || {};
+    const cached = Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
+    const input = Number(usage.input_tokens || 0) + cached;
+    const output = Number(usage.output_tokens || 0);
+    return {
+      drafts: this.normalizeAiDrafts(content, params.input.requestedCount),
+      usage: { input, output, total: input + output, cached },
+      requestId: response.headers.get("request-id") || undefined
+    };
+  }
+
+  private generateZyraDrafts(input: {
+    story: string;
+    context: string;
+    acceptanceCriteria: string;
+    feedback: string;
+    knowledge: Array<{ title: string; content: string }>;
+    jira: Array<{ key: string; summary: string; description: string }>;
+    requestedCount: number;
+  }) {
+    const focus = [
+      "happy path",
+      "required field boundary",
+      "invalid data rejection",
+      "permission edge",
+      "empty state",
+      "duplicate submission",
+      "slow network recovery",
+      "cross-browser behavior",
+      "multi-tab consistency",
+      "audit and traceability"
+    ];
+    const knowledgeHint = input.knowledge[0]?.title || "project knowledge";
+    const jiraHint = input.jira[0]?.key ? `${input.jira[0].key} ${input.jira[0].summary}` : "linked requirements";
+    const feedbackHint = input.feedback ? ` Incorporate feedback: ${input.feedback}` : "";
+    return Array.from({ length: input.requestedCount }).map((_, index) => {
+      const angle = focus[index % focus.length];
+      const title = `${this.compactTitle(input.story)} - ${angle}`;
+      const steps = [
+        { step: 1, action: `Review the story, ${jiraHint}, and ${knowledgeHint}.`, expected: "Relevant requirement context is available." },
+        { step: 2, action: `Prepare data for the ${angle} scenario.`, expected: "Test data matches the scenario intent." },
+        { step: 3, action: `Execute the workflow described in the story.${feedbackHint}`, expected: `The system handles the ${angle} scenario correctly.` },
+        { step: 4, action: "Verify stored state, UI messages, and any linked audit output.", expected: "The final result is traceable and consistent." }
+      ];
+      return {
+        title,
+        preconditions: input.context || input.acceptanceCriteria || "User has access to the target feature and required project data exists.",
+        stepsJson: JSON.stringify(steps),
+        expectedSummary: `Covers ${angle} behavior for: ${input.story}`,
+        priority: index < 2 ? "P1" : "P2",
+        tags: ["zyra", angle.replaceAll(" ", "-")]
+      };
+    });
+  }
+
+  private zyraThinking(input: {
+    story: string;
+    context: string;
+    acceptanceCriteria: string;
+    feedback: string;
+    knowledgeCount: number;
+    jiraCount: number;
+  }): string {
+    const signals = [
+      input.context ? "project context" : null,
+      input.acceptanceCriteria ? "acceptance criteria" : null,
+      input.knowledgeCount ? `${input.knowledgeCount} knowledge-base source(s)` : null,
+      input.jiraCount ? `${input.jiraCount} Jira ticket(s)` : null,
+      input.feedback ? "review feedback" : null
+    ].filter(Boolean).join(", ");
+    return `I checked ${signals || "the submitted story"} and planned coverage across happy path, negative, boundary, permission, data-state, and traceability risks before drafting the testcases.`;
+  }
+
+  private formatAiTask(row: Body) {
+    const item = toCamel(row as QueryResultRow);
+    item.drafts = normalizeJsonArray(row.generated_payload);
+    item.jiraIssueKeys = normalizeJsonArray(row.jira_issue_keys);
+    item.sources = normalizeJsonArray(row.source_summary);
+    item.activities = normalizeJsonArray(row.activity_log);
+    item.tokenUsage = {
+      input: Number(row.token_input || 0),
+      output: Number(row.token_output || 0),
+      total: Number(row.token_total || 0)
+    };
+    return item;
+  }
+
+  private safeSteps(value: unknown) {
+    if (Array.isArray(value)) return value;
+    if (typeof value !== "string") return [];
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private compactTitle(value: string): string {
+    return value.replace(/\s+/g, " ").trim().slice(0, 72) || "Generated testcase";
   }
 
   private async upsertUser(email: string): Promise<string> {

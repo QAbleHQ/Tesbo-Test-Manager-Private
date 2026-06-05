@@ -13,13 +13,11 @@ type AdminNavItem = {
 
 const adminNavItems: AdminNavItem[] = [
   { href: "/admin", label: "System Health", icon: "heartPulse" },
-  { href: "/admin/customers", label: "Customers", icon: "buildings" },
   { href: "/admin/admins", label: "Manage Admins", icon: "shield" },
 ];
 
 type AdminIconName =
   | "heartPulse"
-  | "buildings"
   | "shield"
   | "arrowLeft"
   | "logout"
@@ -54,16 +52,6 @@ function AdminIcon({
             strokeLinecap="round"
             strokeLinejoin="round"
             d="M12 6c-1.5-2-4-3-6-1.5S3 9 6 12l6 6 6-6c3-3 2.5-6 .5-7.5S13.5 4 12 6z"
-          />
-        </svg>
-      );
-    case "buildings":
-      return (
-        <svg {...common}>
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M3 21h18M9 8h1M9 12h1M9 16h1M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16M15 11h4a2 2 0 0 1 2 2v8"
           />
         </svg>
       );
@@ -169,27 +157,29 @@ export default function AdminSidebar() {
 
   return (
     <aside
-      className={`sticky top-0 shrink-0 flex h-screen flex-col bg-[var(--app-shell)] border-r border-[var(--border-subtle)] transition-[width] duration-200 ${
+      className={`tesbo-sidebar sticky top-0 shrink-0 flex h-screen flex-col border-r transition-[width] duration-200 ${
         isCollapsed ? "w-[68px]" : "w-[256px]"
       }`}
     >
       {/* Header */}
-      <div className="flex h-14 items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3">
+      <div className="flex h-16 items-center justify-between gap-2 border-b border-[var(--glass-border)] px-3">
         <Link
           href="/admin"
           className={`flex items-center gap-2 ${isCollapsed ? "justify-center" : ""}`}
           aria-label="Tesbo Admin"
         >
           {isCollapsed ? (
-            <span className="text-base font-bold text-[var(--brand-primary)]">
+            <span className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface-strong)] text-sm font-bold text-[var(--brand-primary)] shadow-sm">
               TA
             </span>
           ) : (
             <div className="flex items-center gap-2">
-              <AdminIcon
-                name="admin"
-                className="h-5 w-5 text-[var(--brand-primary)]"
-              />
+              <span className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface-strong)] shadow-sm">
+                <AdminIcon
+                  name="admin"
+                  className="h-5 w-5 text-[var(--brand-primary)]"
+                />
+              </span>
               <span className="text-[15px] font-bold text-[var(--foreground)]">
                 Tesbo Admin
               </span>
@@ -199,7 +189,7 @@ export default function AdminSidebar() {
         <button
           type="button"
           onClick={() => setIsCollapsed((prev) => !prev)}
-          className="rounded-lg p-1.5 text-[var(--muted-soft)] hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)] transition-colors"
+          className="rounded-xl border border-transparent p-1.5 text-[var(--muted-soft)] transition-colors hover:border-[var(--glass-border)] hover:bg-[var(--glass-surface-muted)] hover:text-[var(--foreground)]"
           aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           <AdminIcon
@@ -211,8 +201,8 @@ export default function AdminSidebar() {
 
       {/* Admin badge */}
       {!isCollapsed && (
-        <div className="border-b border-[var(--border-subtle)] px-4 py-2.5">
-          <div className="flex items-center gap-2 rounded-lg bg-[var(--ai-surface)] px-3 py-1.5">
+        <div className="border-b border-[var(--glass-border)] px-4 py-3">
+          <div className="tesbo-glass-strong flex items-center gap-2 rounded-xl px-3 py-2">
             <span className="h-2 w-2 rounded-full bg-[var(--ai-primary)]" />
             <span className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--ai-primary)]">
               Platform Admin
@@ -222,7 +212,7 @@ export default function AdminSidebar() {
       )}
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-2 pb-2 pt-3 space-y-0.5">
+      <nav className="flex-1 overflow-y-auto px-2.5 pb-2 pt-3 space-y-0.5">
         {adminNavItems.map(({ href, label, icon }) => {
           const active = isPathActive(href);
           return (
@@ -231,14 +221,14 @@ export default function AdminSidebar() {
               href={href}
               title={isCollapsed ? label : undefined}
               aria-label={label}
-              className={`group relative flex items-center overflow-hidden rounded-lg py-2 text-[15px] font-semibold transition-colors duration-150 ${
+              className={`group relative flex items-center overflow-hidden rounded-xl py-2 text-[15px] font-semibold transition-colors duration-150 ${
                 isCollapsed
                   ? "justify-center px-2"
                   : "gap-2.5 pl-5 pr-3.5"
               } ${
                 active
-                  ? "bg-[var(--brand-surface)] text-[var(--foreground)] font-medium"
-                  : "text-[var(--muted)] hover:bg-[var(--surface)]/70 hover:text-[var(--foreground)]"
+                  ? "tesbo-nav-item tesbo-nav-item-active text-[var(--foreground)] font-medium"
+                  : "tesbo-nav-item tesbo-nav-item-idle text-[var(--muted)] hover:text-[var(--foreground)]"
               }`}
             >
               {active && (
@@ -266,10 +256,10 @@ export default function AdminSidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-[var(--border-subtle)] p-2 space-y-1">
+      <div className="border-t border-[var(--glass-border)] p-2.5 space-y-1">
         <Link
           href="/projects"
-          className={`w-full rounded-lg py-2 text-[14px] text-[var(--muted)] hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)] transition-colors ${
+          className={`w-full rounded-xl border border-transparent py-2 text-[14px] text-[var(--muted)] transition-colors hover:border-[var(--glass-border)] hover:bg-[var(--glass-surface-muted)] hover:text-[var(--foreground)] ${
             isCollapsed
               ? "flex justify-center px-2"
               : "flex items-center gap-2.5 px-2.5"
@@ -291,7 +281,7 @@ export default function AdminSidebar() {
           type="button"
           onClick={onLogout}
           disabled={isLoggingOut}
-          className={`w-full rounded-lg py-2 text-[14px] text-[var(--muted)] hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)] transition-colors disabled:opacity-60 ${
+          className={`w-full rounded-xl border border-transparent py-2 text-[14px] text-[var(--muted)] transition-colors hover:border-[var(--glass-border)] hover:bg-[var(--glass-surface-muted)] hover:text-[var(--foreground)] disabled:opacity-60 ${
             isCollapsed
               ? "flex justify-center px-2"
               : "flex items-center gap-2.5 px-2.5 text-left"

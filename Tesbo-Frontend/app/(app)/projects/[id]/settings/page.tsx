@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   authMe,
@@ -104,20 +104,30 @@ export default function ProjectSettingsPage() {
   const [deleteProjectModalOpen, setDeleteProjectModalOpen] = useState(false);
   const [deleteProjectTypedName, setDeleteProjectTypedName] = useState("");
   const jiraTabEnabled = jiraStatus?.connected === true;
-  const visibleTabs: Array<{ key: SettingsTab; label: string }> = [
-    { key: "general", label: "General" },
-    { key: "testRuns", label: "Test Environments" },
-    { key: "members", label: "Members" },
-    ...(jiraTabEnabled ? [{ key: "jira" as const, label: "Jira" }] : []),
-    { key: "integrations", label: "Integrations" },
-  ];
+  const visibleTabs = useMemo<Array<{ key: SettingsTab; label: string }>>(
+    () => [
+      { key: "general", label: "General" },
+      { key: "testRuns", label: "Test Environments" },
+      { key: "members", label: "Team Members" },
+      ...(jiraTabEnabled ? [{ key: "jira" as const, label: "Jira" }] : []),
+      { key: "integrations", label: "Integrations" },
+    ],
+    [jiraTabEnabled]
+  );
 
   useEffect(() => {
     const tab = searchParams.get("tab");
     if (!tab) return;
+    const tabAliases: Record<string, SettingsTab> = {
+      environments: "testRuns",
+      testEnvironments: "testRuns",
+      team: "members",
+      teamMembers: "members",
+    };
+    const normalizedTab = tabAliases[tab] ?? tab;
     const allowed: SettingsTab[] = visibleTabs.map((item) => item.key);
-    if (allowed.includes(tab as SettingsTab)) {
-      setActiveTab(tab as SettingsTab);
+    if (allowed.includes(normalizedTab as SettingsTab)) {
+      setActiveTab(normalizedTab as SettingsTab);
     }
   }, [searchParams, visibleTabs]);
 
@@ -310,6 +320,11 @@ export default function ProjectSettingsPage() {
     setTestRunEnvironments((prev) => prev.filter((_, i) => i !== index));
   }
 
+  function handleTabChange(tab: SettingsTab) {
+    setActiveTab(tab);
+    router.replace(`/projects/${projectId}/settings?tab=${tab}`, { scroll: false });
+  }
+
   const memberIds = new Set(projectMembers.map((member) => member.userId));
   const availableToAdd = workspaceMembers.filter((member) => !memberIds.has(member.userId));
 
@@ -408,7 +423,7 @@ export default function ProjectSettingsPage() {
             <button
               key={tab.key}
               type="button"
-              onClick={() => setActiveTab(tab.key as SettingsTab)}
+              onClick={() => handleTabChange(tab.key)}
               className={`px-3 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
                 activeTab === tab.key
                   ? "border-[var(--brand-primary)] text-[var(--brand-primary)]"

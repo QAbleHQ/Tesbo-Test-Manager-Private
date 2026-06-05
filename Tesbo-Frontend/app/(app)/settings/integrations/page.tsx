@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -26,13 +27,24 @@ export default function WorkspaceIntegrationsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
-  const [newProvider, setNewProvider] = useState<"openai" | "anthropic">("openai");
+  const [newProvider, setNewProvider] = useState("openai");
+  const [newCustomProvider, setNewCustomProvider] = useState("");
   const [newApiKey, setNewApiKey] = useState("");
-  const [newDefaultModel, setNewDefaultModel] = useState("");
+  const [newDefaultModel, setNewDefaultModel] = useState("gpt-4o");
+  const [newBaseUrl, setNewBaseUrl] = useState("");
+  const [newAuthHeaderName, setNewAuthHeaderName] = useState("Authorization");
+  const [newAuthScheme, setNewAuthScheme] = useState("Bearer");
   const [deletingKeyId, setDeletingKeyId] = useState<string | null>(null);
   const [allocatingProjectId, setAllocatingProjectId] = useState<string | null>(null);
 
   const canManageKeys = workspaceRole === "owner";
+  const providerValue = newProvider === "custom" ? newCustomProvider.trim().toLowerCase() : newProvider;
+  const modelOptions =
+    newProvider === "anthropic"
+      ? ["claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022"]
+      : newProvider === "openai"
+        ? ["gpt-4o", "gpt-4.1", "gpt-4.1-mini"]
+        : [];
 
   const loadData = useCallback(async () => {
     try {
@@ -65,13 +77,20 @@ export default function WorkspaceIntegrationsPage() {
     try {
       await createWorkspaceAiKey({
         name: newName.trim(),
-        provider: newProvider,
+        provider: providerValue,
         apiKey: newApiKey.trim(),
-        defaultModel: newDefaultModel.trim() || undefined,
+        defaultModel: newDefaultModel.trim() === "custom" ? undefined : newDefaultModel.trim() || undefined,
+        baseUrl: newBaseUrl.trim() || undefined,
+        authHeaderName: newAuthHeaderName.trim() || undefined,
+        authScheme: newAuthScheme.trim(),
       });
       setNewName("");
+      setNewCustomProvider("");
       setNewApiKey("");
-      setNewDefaultModel("");
+      setNewDefaultModel(newProvider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
+      setNewBaseUrl("");
+      setNewAuthHeaderName("Authorization");
+      setNewAuthScheme("Bearer");
       setMessage("Workspace AI key added.");
       await loadData();
     } catch (e) {
@@ -149,6 +168,11 @@ export default function WorkspaceIntegrationsPage() {
         <PageHeader
           title="Integrations"
           subtitle="Configure workspace AI keys and assign one key per project."
+          actions={
+            <Link href="/settings/integrations/ai-providers" className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-secondary)]">
+              AI provider details
+            </Link>
+          }
         />
       }
     >
@@ -194,34 +218,67 @@ export default function WorkspaceIntegrationsPage() {
               <FieldLabel>Provider</FieldLabel>
               <Select
                 value={newProvider}
-                onChange={(e) => setNewProvider(e.target.value as "openai" | "anthropic")}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setNewProvider(next);
+                  setNewDefaultModel(next === "anthropic" ? "claude-sonnet-4-20250514" : next === "openai" ? "gpt-4o" : "");
+                }}
                 disabled={saving}
               >
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
+                <option value="custom">Custom provider</option>
               </Select>
             </Field>
+            {newProvider === "custom" && (
+              <>
+                <Field>
+                  <FieldLabel>Provider name</FieldLabel>
+                  <Input value={newCustomProvider} onChange={(e) => setNewCustomProvider(e.target.value)} placeholder="groq, together, ollama" disabled={saving} />
+                </Field>
+                <Field>
+                  <FieldLabel>API base URL</FieldLabel>
+                  <Input value={newBaseUrl} onChange={(e) => setNewBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" disabled={saving} />
+                </Field>
+              </>
+            )}
             <Field className="sm:col-span-2">
               <FieldLabel>API key</FieldLabel>
               <Input
                 type="password"
                 value={newApiKey}
                 onChange={(e) => setNewApiKey(e.target.value)}
-                placeholder={newProvider === "openai" ? "sk-..." : "sk-ant-..."}
+                placeholder={newProvider === "anthropic" ? "sk-ant-..." : "sk-..."}
                 disabled={saving}
               />
             </Field>
             <Field className="sm:col-span-2">
-              <FieldLabel>Default model (optional)</FieldLabel>
+              <FieldLabel>Default model</FieldLabel>
               <Input
+                list="workspace-ai-model-options"
                 value={newDefaultModel}
                 onChange={(e) => setNewDefaultModel(e.target.value)}
-                placeholder={newProvider === "openai" ? "gpt-4o" : "claude-sonnet-4-5-20250929"}
+                placeholder={newProvider === "custom" ? "Custom model name" : "Select or type a model name"}
                 disabled={saving}
               />
+              <datalist id="workspace-ai-model-options">
+                {modelOptions.map((model) => <option key={model} value={model} />)}
+              </datalist>
             </Field>
+            {newProvider === "custom" && (
+              <>
+                <Field>
+                  <FieldLabel>Auth header</FieldLabel>
+                  <Input value={newAuthHeaderName} onChange={(e) => setNewAuthHeaderName(e.target.value)} placeholder="Authorization" disabled={saving} />
+                </Field>
+                <Field>
+                  <FieldLabel>Auth scheme</FieldLabel>
+                  <Input value={newAuthScheme} onChange={(e) => setNewAuthScheme(e.target.value)} placeholder="Bearer" disabled={saving} />
+                </Field>
+              </>
+            )}
             <div className="sm:col-span-2">
-              <Button type="submit" disabled={saving}>
+              <Button type="submit" disabled={saving || !providerValue || (newProvider === "custom" && !newBaseUrl.trim())}>
                 {saving ? "Adding key..." : "Add workspace AI key"}
               </Button>
             </div>

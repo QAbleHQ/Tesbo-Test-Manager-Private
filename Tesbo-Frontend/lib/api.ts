@@ -47,7 +47,9 @@ export async function api<T = unknown>(
     throw new Error(formatApiError(res.status, err));
   }
   if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  if (!text.trim()) return undefined as T;
+  return JSON.parse(text) as T;
 }
 
 export async function authMe(): Promise<{
@@ -82,31 +84,6 @@ export async function getSystemHealth() {
       }
     >;
   }>("/api/admin/system/health");
-}
-
-export async function getAdminCustomers() {
-  return api<{
-    summary: {
-      totalOrganizations: number;
-      totalMembers: number;
-      totalProjects: number;
-      totalTestCases: number;
-      totalAutomated: number;
-      overallAutomationCoverage: number;
-    };
-    customers: Array<{
-      id: string;
-      name: string;
-      slug: string;
-      createdAt: string;
-      memberCount: number;
-      projectCount: number;
-      testCaseCount: number;
-      automatedCount: number;
-      automationCoverage: number;
-      lastActivityAt: string | null;
-    }>;
-  }>("/api/admin/customers");
 }
 
 export async function getAdminList() {
@@ -218,8 +195,11 @@ export async function getWorkspace(): Promise<WorkspaceInfo> {
 export interface WorkspaceAiKey {
   id: string;
   name: string;
-  provider: "openai" | "anthropic";
+  provider: string;
   defaultModel?: string;
+  baseUrl?: string | null;
+  authHeaderName?: string | null;
+  authScheme?: string | null;
   active: boolean;
   maskedKey: string;
   createdAt: string;
@@ -244,9 +224,12 @@ export async function listWorkspaceAiKeys(): Promise<WorkspaceAiKeysResponse> {
 
 export async function createWorkspaceAiKey(data: {
   name: string;
-  provider: "openai" | "anthropic";
+  provider: string;
   apiKey: string;
   defaultModel?: string;
+  baseUrl?: string;
+  authHeaderName?: string;
+  authScheme?: string;
 }): Promise<WorkspaceAiKey> {
   return api<WorkspaceAiKey>("/api/workspace/ai-keys", {
     method: "POST",
@@ -485,6 +468,116 @@ export async function trackAiGenerationSaved(
   data: { suiteId?: string; testcaseIds: string[] }
 ): Promise<void> {
   await api(`/api/projects/${projectId}/ai/generation-history/${requestId}/save`, {
+    method: "POST",
+    body: data,
+  });
+}
+
+export interface ZyraTask {
+  id: string;
+  provider: "openai" | "anthropic";
+  model: string | null;
+  userStory: string;
+  acceptanceCriteria: string;
+  customPrompt: string;
+  requestedCount: number;
+  generatedCount: number;
+  savedCount: number;
+  taskStatus: "todo" | "in_progress" | "in_review" | "done" | "accepted" | "rejected" | string;
+  feedback: string;
+  context: string;
+  jiraIssueKeys: string[];
+  drafts: AiGeneratedDraft[];
+  sources: Array<{ type: string; title: string; detail: string }>;
+  activities: Array<{ actor: "user" | "agent" | string; stage: string; title: string; detail: string; createdAt: string }>;
+  tokenUsage: { input: number; output: number; total: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ZyraAgentState {
+  agent: {
+    name: string;
+    role: string;
+    active: boolean;
+    activationReason: string;
+  };
+  settings: { testcaseCount: number };
+  aiKey: {
+    id: string;
+    name: string;
+    provider: string;
+    defaultModel?: string | null;
+    baseUrl?: string | null;
+    authHeaderName?: string | null;
+    authScheme?: string | null;
+    maskedKey: string;
+  } | null;
+  tokenUsage: { total: number };
+  tasks: ZyraTask[];
+}
+
+export async function getZyraAgent(projectId: string): Promise<ZyraAgentState> {
+  return api<ZyraAgentState>(`/api/projects/${projectId}/agents/zyra`);
+}
+
+export async function updateZyraSettings(projectId: string, data: { testcaseCount: number }): Promise<{ testcaseCount: number }> {
+  return api<{ testcaseCount: number }>(`/api/projects/${projectId}/agents/zyra/settings`, {
+    method: "PATCH",
+    body: data,
+  });
+}
+
+export async function createZyraTask(
+  projectId: string,
+  data: {
+    story: string;
+    context?: string;
+    acceptanceCriteria?: string;
+    jiraIssueKeys?: string[];
+    knowledgeItemIds?: string[];
+    count?: number;
+  }
+): Promise<GenerateAiTestCasesResponse & { task: ZyraTask; tokenUsage: { input: number; output: number; total: number } }> {
+  return api(`/api/projects/${projectId}/agents/zyra/tasks`, {
+    method: "POST",
+    body: data,
+  });
+}
+
+export async function getZyraTask(projectId: string, taskId: string): Promise<ZyraTask> {
+  return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}`);
+}
+
+export async function sendZyraFeedback(
+  projectId: string,
+  taskId: string,
+  data: string | { feedback: string; referenceNote?: string; jiraIssueKeys?: string[] }
+): Promise<GenerateAiTestCasesResponse & { task: ZyraTask; tokenUsage: { input: number; output: number; total: number } }> {
+  return api(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/feedback`, {
+    method: "POST",
+    body: typeof data === "string" ? { feedback: data } : data,
+  });
+}
+
+export async function deleteZyraTaskDraft(projectId: string, taskId: string, draftIndex: number): Promise<ZyraTask> {
+  return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/drafts/${draftIndex}`, {
+    method: "DELETE",
+  });
+}
+
+export async function closeZyraTask(projectId: string, taskId: string): Promise<ZyraTask> {
+  return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/close`, {
+    method: "POST",
+  });
+}
+
+export async function saveZyraTask(
+  projectId: string,
+  taskId: string,
+  data: { selectedDraftIndexes: number[]; suiteId?: string; suiteName?: string }
+): Promise<{ savedCount: number; suiteId: string | null; testcases: { id: string; externalId: string; title: string; createdAt: string }[] }> {
+  return api(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/save`, {
     method: "POST",
     body: data,
   });

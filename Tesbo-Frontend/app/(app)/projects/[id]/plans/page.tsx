@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { authMe, listPlans, createPlan, getProject, type PlanListItem } from "@/lib/api";
@@ -41,6 +41,7 @@ function ProgressBar({ passed, failed, untested, total }: { passed: number; fail
 export default function PlansPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const projectId = params.id as string;
   const [plans, setPlans] = useState<PlanListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +52,12 @@ export default function PlansPage() {
   const [newDesc, setNewDesc] = useState("");
   const [newRelease, setNewRelease] = useState("");
   const [canManagePlans, setCanManagePlans] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get("create") === "1") {
+      setShowCreate(true);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     authMe().then((me) => {
@@ -64,8 +71,8 @@ export default function PlansPage() {
       ])
         .then(([plansData, projectData]) => {
           setPlans(plansData as unknown as PlanListItem[]);
-          const myRole = (projectData.myRole as string ?? "").toLowerCase();
-          setCanManagePlans(["owner", "admin", "manager"].includes(myRole));
+          const myRole = typeof projectData.myRole === "string" ? projectData.myRole.toLowerCase() : "";
+          setCanManagePlans(!myRole || ["owner", "admin", "manager"].includes(myRole));
         })
         .catch(() => router.replace("/projects"))
         .finally(() => setLoading(false));
@@ -119,7 +126,7 @@ export default function PlansPage() {
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                   </svg>
-                  New Plan
+                  Create Test Plan
                 </Button>
               ) : undefined
             }
@@ -168,7 +175,7 @@ export default function PlansPage() {
               )}
               <div className="flex items-center gap-3 mt-4">
                 <Button type="submit" disabled={creating || !newName.trim()}>
-                  {creating ? "Creating..." : "Create Plan"}
+                  {creating ? "Creating..." : "Create Test Plan"}
                 </Button>
                 <Button
                   type="button"

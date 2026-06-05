@@ -35,7 +35,7 @@ const projectNavSections: Array<{ section: string; items: NavItemConfig[] }> = [
     section: "Scenarios",
     items: [
       { href: "suites", label: "Suites", icon: "list" },
-      { href: "plans", label: "Execution Plans", icon: "clipboard" },
+      { href: "plans", label: "Test Plans", icon: "clipboard" },
       { href: "cycles", label: "Runs", icon: "play" },
       { href: "bugs", label: "Bugs", icon: "bug" },
       { href: "reports", label: "Insights", icon: "chart" },
@@ -44,6 +44,15 @@ const projectNavSections: Array<{ section: string; items: NavItemConfig[] }> = [
   {
     section: "Assets",
     items: [
+      {
+        href: "agents",
+        label: "Agents",
+        icon: "sparkles",
+        children: [
+          { href: "agents/tasks", label: "Tasks", icon: "clipboard" },
+          { href: "agents", label: "Settings", icon: "settings" },
+        ],
+      },
       { href: "knowledge-base", label: "Knowledge Base", icon: "book" },
     ],
   },
@@ -130,8 +139,8 @@ function NavLink({
             : "gap-2.5 pl-4 pr-3.5"
       } ${
         active
-          ? "border border-[var(--brand-border)] bg-[var(--brand-surface)] text-[var(--foreground)] shadow-sm"
-          : "border border-transparent text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--foreground)]"
+          ? "tesbo-nav-item tesbo-nav-item-active text-[var(--foreground)]"
+          : "tesbo-nav-item tesbo-nav-item-idle text-[var(--muted)] hover:text-[var(--foreground)]"
       }`}
     >
       {active && <span className="absolute inset-y-1 left-0 w-[3px] rounded-r-full bg-[var(--brand-primary)]" aria-hidden />}
@@ -236,22 +245,27 @@ function SidebarContent() {
 
   return (
     <aside
-      className={`sticky top-0 shrink-0 flex h-screen flex-col border-r border-[var(--border)] bg-[var(--app-shell)] transition-[width] duration-200 ${
+      className={`tesbo-sidebar sticky top-0 shrink-0 flex h-screen flex-col border-r transition-[width] duration-200 ${
         isCollapsed ? "w-[72px]" : "w-[248px]"
       }`}
     >
-      <div className="flex h-14 items-center justify-between gap-2 border-b border-[var(--border)] px-3">
+      <div className="flex h-16 items-center justify-between gap-2 border-b border-[var(--glass-border)] px-3">
         <Link href="/projects" className={`flex items-center ${isCollapsed ? "justify-center" : ""}`} aria-label="Tesbo">
           {isCollapsed ? (
-            <span className="text-base font-bold text-[var(--foreground)]">TX</span>
+            <span className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface-strong)] text-sm font-bold text-[var(--brand-primary)] shadow-sm">TX</span>
           ) : (
-            <Image src="/tesbox-logo-transparent.png" alt="Tesbo" width={110} height={30} priority className="h-7 w-auto" />
+            <span className="flex items-center gap-2.5">
+              <span className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface-strong)] shadow-sm">
+                <Image src="/tesbox-logo-transparent.png" alt="" width={26} height={26} priority className="h-6 w-auto" />
+              </span>
+              <Image src="/tesbox-logo-transparent.png" alt="Tesbo" width={108} height={30} priority className="h-7 w-auto" />
+            </span>
           )}
         </Link>
         <button
           type="button"
           onClick={() => setIsCollapsed((prev) => !prev)}
-          className="rounded-lg p-1.5 text-[var(--muted-soft)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--foreground)]"
+          className="rounded-xl border border-transparent p-1.5 text-[var(--muted-soft)] transition-colors hover:border-[var(--glass-border)] hover:bg-[var(--glass-surface-muted)] hover:text-[var(--foreground)]"
           aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           <MenuIcon name={isCollapsed ? "chevronRight" : "chevronLeft"} className="h-4 w-4" />
@@ -259,16 +273,16 @@ function SidebarContent() {
       </div>
 
       {ENABLE_SCOPE_SWITCHER && !isCollapsed && (
-        <div className="border-b border-[var(--border)] px-3 py-3">
+        <div className="border-b border-[var(--glass-border)] px-3 py-3">
           <p className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-soft)]">Scope Lock</p>
-          <div className="mt-2 grid grid-cols-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]">
+          <div className="tesbo-glass-strong mt-2 grid grid-cols-2 rounded-xl p-1">
             <button
               type="button"
               onClick={() => onScopeChange("workspace")}
               className={`rounded-lg px-2 py-1.5 text-[12px] font-semibold transition-colors ${
                 navScope === "workspace"
-                  ? "bg-[var(--brand-surface)] text-[var(--foreground)]"
-                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
+                  ? "bg-[var(--brand-surface)] text-[var(--foreground)] shadow-sm"
+                  : "text-[var(--muted)] hover:bg-[var(--glass-surface-muted)] hover:text-[var(--foreground)]"
               }`}
             >
               Workspace
@@ -278,8 +292,8 @@ function SidebarContent() {
               onClick={() => onScopeChange("project")}
               className={`rounded-lg px-2 py-1.5 text-[12px] font-semibold transition-colors ${
                 navScope === "project"
-                  ? "bg-[var(--brand-surface)] text-[var(--foreground)]"
-                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
+                  ? "bg-[var(--brand-surface)] text-[var(--foreground)] shadow-sm"
+                  : "text-[var(--muted)] hover:bg-[var(--glass-surface-muted)] hover:text-[var(--foreground)]"
               }`}
             >
               Project
@@ -293,7 +307,7 @@ function SidebarContent() {
               <select
                 value={projectId ?? ""}
                 onChange={(e) => onProjectSelect(e.target.value)}
-                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[13px] text-[var(--foreground)] shadow-[var(--shadow-card)]"
+                className="w-full rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface-strong)] px-3 py-2 text-[13px] text-[var(--foreground)] shadow-[var(--shadow-card)] backdrop-blur"
               >
                 <option value="" disabled>
                   Select project
@@ -309,7 +323,7 @@ function SidebarContent() {
         </div>
       )}
 
-      <nav className="flex-1 space-y-3 overflow-y-auto px-2 pb-3 pt-3">
+      <nav className="flex-1 space-y-3 overflow-y-auto px-2.5 pb-3 pt-3">
         {showGlobalNavigation && (
           <div className="space-y-0.5">
             {(ENABLE_SCOPE_SWITCHER ? workspaceModeNavItems : globalNavItems).map(({ href, label, icon }) => (
@@ -341,13 +355,17 @@ function SidebarContent() {
                             <div className="mt-0.5 space-y-0.5">
                               {children.map((child) => {
                                 const childHref = `${projectPathPrefix}/${child.href}`;
+                                const childActive =
+                                  child.href === "agents"
+                                    ? pathname === childHref
+                                    : isPathActive(childHref);
                                 return (
                                   <NavLink
                                     key={child.href}
                                     href={childHref}
                                     label={child.label}
                                     icon={child.icon}
-                                    active={isPathActive(childHref)}
+                                    active={childActive}
                                     collapsed={isCollapsed}
                                     nested
                                   />
@@ -388,9 +406,9 @@ function SidebarContent() {
         )}
       </nav>
 
-      <div className="space-y-2 border-t border-[var(--border)] p-2">
+      <div className="space-y-2 border-t border-[var(--glass-border)] p-2.5">
         {!isCollapsed && (
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-2">
+          <div className="tesbo-glass-strong rounded-xl p-2">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-soft)]">
               Theme
             </p>
@@ -410,7 +428,7 @@ function SidebarContent() {
           type="button"
           onClick={onLogout}
           disabled={isLoggingOut}
-          className={`w-full rounded-xl border border-transparent py-2 text-[14px] text-[var(--muted)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--foreground)] disabled:opacity-60 ${
+          className={`w-full rounded-xl border border-transparent py-2 text-[14px] text-[var(--muted)] transition-colors hover:border-[var(--glass-border)] hover:bg-[var(--glass-surface-muted)] hover:text-[var(--foreground)] disabled:opacity-60 ${
             isCollapsed ? "flex justify-center px-2" : "flex items-center gap-2.5 px-2.5 text-left"
           }`}
           aria-label={isLoggingOut ? "Logging out" : "Log out"}

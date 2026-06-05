@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import {
@@ -48,6 +48,7 @@ type ProjectSettingsPayload = {
 export default function TestRunsPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const projectId = params.id as string;
 
   const [runs, setRuns] = useState<TestRunListItem[]>([]);
@@ -67,6 +68,14 @@ export default function TestRunsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [environmentOptions, setEnvironmentOptions] = useState<TestEnvironmentSetting[]>([]);
   const [canManageRuns, setCanManageRuns] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get("create") === "1") {
+      resetForm();
+      setFormError(null);
+      setShowCreate(true);
+    }
+  }, [searchParams]);
 
   function parseProjectSettings(raw: unknown): ProjectSettingsPayload {
     if (typeof raw !== "string" || !raw.trim()) return {};
@@ -97,8 +106,8 @@ export default function TestRunsPage() {
         setRuns(runsData);
         const parsedSettings = parseProjectSettings(project.settings);
         setEnvironmentOptions(normalizeTestRunEnvironments(parsedSettings.testRunEnvironments));
-        const myRole = (project.myRole as string ?? "").toLowerCase();
-        setCanManageRuns(["owner", "admin", "manager"].includes(myRole));
+        const myRole = typeof project.myRole === "string" ? project.myRole.toLowerCase() : "";
+        setCanManageRuns(!myRole || ["owner", "admin", "manager"].includes(myRole));
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -211,7 +220,7 @@ export default function TestRunsPage() {
                     setShowCreate(true);
                   }}
                 >
-                  + New Test Run
+                  Create Test Run
                 </Button>
                 <Link
                   href={`/projects/${projectId}/cycles/schedule`}
@@ -233,7 +242,7 @@ export default function TestRunsPage() {
           icon={emptyIcon}
           action={canManageRuns ? (
             <Button onClick={() => { resetForm(); setFormError(null); setShowCreate(true); }}>
-              + New Test Run
+              Create Test Run
             </Button>
           ) : undefined}
         />
@@ -409,7 +418,7 @@ export default function TestRunsPage() {
               type="submit"
               disabled={saving || !name.trim() || !environment.trim() || environmentOptions.length === 0}
             >
-              {saving ? "Creating…" : "Create"}
+              {saving ? "Creating…" : "Create Test Run"}
             </Button>
           </div>
         </form>

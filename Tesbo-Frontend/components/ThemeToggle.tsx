@@ -33,7 +33,7 @@ export default function ThemeToggle() {
   };
 
   return (
-    <div className="inline-flex items-center rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]">
+    <div className="tesbo-glass-strong inline-flex items-center rounded-xl p-1">
       {(["light", "dark"] as ThemeMode[]).map((mode) => {
         const active = theme === mode;
         return (
@@ -45,8 +45,8 @@ export default function ThemeToggle() {
             onClick={() => setMode(mode)}
             className={`inline-flex items-center gap-2 rounded-[10px] px-3 py-2 text-[13px] font-semibold transition-colors ${
               active
-                ? "bg-[var(--surface-secondary)] text-[var(--foreground)] shadow-sm"
-                : "text-[var(--muted)] hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)]"
+                ? "bg-[var(--brand-surface)] text-[var(--foreground)] shadow-sm"
+                : "text-[var(--muted)] hover:bg-[var(--glass-surface-muted)] hover:text-[var(--foreground)]"
             }`}
           >
             <ThemeIcon mode={mode} />

@@ -30,7 +30,7 @@ export default function AdminLayout({
 
   if (!authorized) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[var(--background)]">
+      <div className="tesbo-app-shell flex min-h-screen items-center justify-center">
         <div className="flex items-center gap-3 text-[var(--muted)]">
           <svg
             className="h-5 w-5 animate-spin"
@@ -58,7 +58,7 @@ export default function AdminLayout({
   }
 
   return (
-    <div className="flex min-h-screen bg-[var(--background)]">
+    <div className="tesbo-app-shell flex min-h-screen">
       <AdminSidebar />
       <main className="flex-1 min-w-0 overflow-y-auto">
         <div className="tesbo-page">{children}</div>

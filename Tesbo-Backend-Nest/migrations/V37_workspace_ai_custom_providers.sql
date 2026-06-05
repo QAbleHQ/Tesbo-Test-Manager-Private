@@ -1,0 +1,4 @@
+ALTER TABLE workspace_ai_keys
+ADD COLUMN IF NOT EXISTS base_url TEXT,
+ADD COLUMN IF NOT EXISTS auth_header_name VARCHAR(128) NOT NULL DEFAULT 'Authorization',
+ADD COLUMN IF NOT EXISTS auth_scheme VARCHAR(64) NOT NULL DEFAULT 'Bearer';

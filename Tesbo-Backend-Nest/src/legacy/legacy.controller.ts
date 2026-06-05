@@ -73,29 +73,24 @@ export class LegacyController {
   }
 
   @Get("/api/workspace/ai-keys")
-  aiKeys() {
-    return { keys: [], projects: [] };
+  aiKeys(@Req() req: AuthenticatedRequest) {
+    return this.legacy.aiKeys(req.userId);
   }
 
   @Post("/api/workspace/ai-keys")
-  createAiKey(@Body() body: Record<string, any>) {
-    return {
-      id: "local-key",
-      name: body.name || "AI key",
-      provider: body.provider || "openai",
-      defaultModel: body.defaultModel || null,
-      active: true,
-      maskedKey: "********",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+  createAiKey(@Req() req: AuthenticatedRequest, @Body() body: Record<string, any>) {
+    return this.legacy.createAiKey(req.userId, body);
   }
 
   @Delete("/api/workspace/ai-keys/:keyId")
-  deleteAiKey() {}
+  deleteAiKey(@Req() req: AuthenticatedRequest, @Param("keyId") keyId: string) {
+    return this.legacy.deleteAiKey(req.userId, keyId);
+  }
 
   @Post("/api/workspace/ai-keys/allocations")
-  allocateAiKey() {}
+  allocateAiKey(@Req() req: AuthenticatedRequest, @Body() body: Record<string, any>) {
+    return this.legacy.allocateAiKey(req.userId, body);
+  }
 
   @Get("/api/workspace/invitations")
   invitations() {
@@ -276,13 +271,13 @@ export class LegacyController {
   }
 
   @Get("/api/plans/:planId/runs")
-  planRuns() {
-    return [];
+  planRuns(@Param("planId") planId: string) {
+    return this.legacy.planRuns(planId);
   }
 
   @Get("/api/plans/:planId/progress")
-  planProgress() {
-    return { total: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, untested: 0 };
+  planProgress(@Param("planId") planId: string) {
+    return this.legacy.planProgress(planId);
   }
 
   @Get("/api/projects/:projectId/cycles")
@@ -461,8 +456,8 @@ export class LegacyController {
   }
 
   @Post("/api/projects/:projectId/ai/generate-testcases")
-  generateAi() {
-    return this.legacy.aiGenerate();
+  generateAi(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.aiGenerate(projectId, req.userId, body);
   }
 
   @Post("/api/projects/:projectId/ai/review-script")
@@ -471,12 +466,59 @@ export class LegacyController {
   }
 
   @Get("/api/projects/:projectId/ai/generation-history")
-  aiHistory() {
-    return { list: [] };
+  aiHistory(@Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.aiHistory(projectId, query);
   }
 
   @Post("/api/projects/:projectId/ai/generation-history/:requestId/save")
-  aiSave() {}
+  aiSave(@Param("projectId") projectId: string, @Param("requestId") requestId: string, @Body() body: Record<string, any>) {
+    return this.legacy.aiSave(projectId, requestId, body);
+  }
+
+  @Get("/api/projects/:projectId/agents/zyra")
+  zyraAgent(@Param("projectId") projectId: string) {
+    return this.legacy.zyraAgent(projectId);
+  }
+
+  @Patch("/api/projects/:projectId/agents/zyra/settings")
+  updateZyraSettings(@Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.updateZyraSettings(projectId, body);
+  }
+
+  @Post("/api/projects/:projectId/agents/zyra/tasks")
+  createZyraTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.aiGenerate(projectId, req.userId, body);
+  }
+
+  @Get("/api/projects/:projectId/agents/zyra/tasks/:taskId")
+  getZyraTask(@Param("projectId") projectId: string, @Param("taskId") taskId: string) {
+    return this.legacy.zyraTask(projectId, taskId);
+  }
+
+  @Post("/api/projects/:projectId/agents/zyra/tasks/:taskId/feedback")
+  feedbackZyraTask(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("taskId") taskId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.legacy.zyraFeedback(projectId, req.userId, taskId, body);
+  }
+
+  @Delete("/api/projects/:projectId/agents/zyra/tasks/:taskId/drafts/:draftIndex")
+  deleteZyraDraft(@Param("projectId") projectId: string, @Param("taskId") taskId: string, @Param("draftIndex") draftIndex: string) {
+    return this.legacy.zyraDeleteDraft(projectId, taskId, Number(draftIndex));
+  }
+
+  @Post("/api/projects/:projectId/agents/zyra/tasks/:taskId/close")
+  closeZyraTask(@Param("projectId") projectId: string, @Param("taskId") taskId: string) {
+    return this.legacy.zyraCloseTask(projectId, taskId);
+  }
+
+  @Post("/api/projects/:projectId/agents/zyra/tasks/:taskId/save")
+  saveZyraTask(@Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.zyraSave(projectId, taskId, body);
+  }
 
   @Get("/api/projects/:projectId/knowledge-base")
   knowledge(@Param("projectId") projectId: string, @Query() query: Record<string, any>) {

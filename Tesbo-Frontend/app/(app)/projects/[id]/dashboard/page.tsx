@@ -81,6 +81,22 @@ export default function ProjectDashboardPage() {
               <span className="text-[var(--foreground)]">{name}</span>
             </div>
           )}
+          actions={(
+            <>
+              <Link
+                href={`/projects/${projectId}/cycles?create=1`}
+                className="inline-flex h-11 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-[var(--border)] bg-[var(--surface)] px-5 text-[15px] font-medium text-[var(--foreground)] shadow-sm transition-colors hover:bg-[var(--surface-secondary)]"
+              >
+                Create Test Run
+              </Link>
+              <Link
+                href={`/projects/${projectId}/plans?create=1`}
+                className="inline-flex h-11 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-transparent bg-[var(--brand-primary)] px-5 text-[15px] font-medium text-white shadow-sm transition-colors hover:bg-[var(--brand-hover)]"
+              >
+                Create Test Plan
+              </Link>
+            </>
+          )}
         />
       )}
     >

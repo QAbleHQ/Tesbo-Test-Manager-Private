@@ -6,9 +6,9 @@ export default function AppLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen bg-[var(--background)] text-[var(--foreground)]">
+    <div className="tesbo-app-shell flex min-h-screen text-[var(--foreground)]">
       <Sidebar />
-      <main className="min-w-0 flex-1 overflow-y-auto bg-[var(--background)]">
+      <main className="min-w-0 flex-1 overflow-y-auto">
         <div className="tesbo-page">{children}</div>
       </main>
     </div>
