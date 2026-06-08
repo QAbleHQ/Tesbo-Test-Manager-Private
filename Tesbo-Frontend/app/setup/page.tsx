@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createFirstAdmin, getSetupStatus } from "@/lib/api";
+import { BrandLogo } from "@/components/BrandLogo";
 import { Button, Field, FieldError, FieldHint, FieldLabel, Input } from "@/components/ui";
 
 type Step = "admin" | "organization" | "data";
@@ -94,14 +94,7 @@ export default function SetupPage() {
     <div className="min-h-screen bg-[var(--background)] px-4 py-10">
       <div className="mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-md flex-col justify-center">
         <div className="mb-8 text-center">
-          <Image
-            src="/tesbox-logo-transparent.png"
-            alt="Tesbo"
-            width={280}
-            height={80}
-            priority
-            className="mx-auto h-14 w-auto"
-          />
+          <BrandLogo className="mx-auto h-14 max-w-[280px] object-contain" />
           <p className="mt-3 text-sm font-medium text-[var(--muted)]">
             Initial open-source setup
           </p>

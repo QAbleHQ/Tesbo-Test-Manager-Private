@@ -1,10 +1,10 @@
-# Tesbo Nest Backend
+# Tesbo Test Manager Nest Backend
 
-Primary NestJS backend for Tesbo.
+Primary NestJS backend for Tesbo Test Manager.
 
 ## API coverage
 
-The service exposes the Tesbo product API surface used by the frontend, including auth, setup, workspace, projects, suites, test cases, plans, cycles, reports, AI stubs, admin views, and health checks.
+The service exposes the Tesbo Test Manager product API surface used by the frontend, including auth, setup, workspace, projects, suites, test cases, plans, cycles, reports, AI stubs, admin views, and health checks.
 
 The service uses the PostgreSQL schema in `migrations/` and the `tesbo_session` cookie contract.
 

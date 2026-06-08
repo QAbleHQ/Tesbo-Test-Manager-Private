@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import type { QueryResultRow } from "pg";
 import { DatabaseService } from "../database/database.service";
 
@@ -115,6 +115,13 @@ export class LegacyService {
   private requireUser(userId?: string | null): string {
     if (!userId) throw new BadRequestException({ error: "Authentication required" });
     return userId;
+  }
+
+  private async requirePlatformAdmin(userId?: string | null): Promise<string> {
+    const uid = this.requireUser(userId);
+    const result = await this.db.query("SELECT 1 FROM platform_admins WHERE user_id = $1 LIMIT 1", [uid]);
+    if (!result.rows[0]) throw new ForbiddenException({ error: "Platform admin access required" });
+    return uid;
   }
 
   async createWorkspace(userId: string | null | undefined, body: Body) {
@@ -978,6 +985,43 @@ export class LegacyService {
        FROM platform_admins pa JOIN users u ON u.id = pa.user_id ORDER BY pa.created_at`
     );
     return res.rows.map(toCamel);
+  }
+
+  async publicBranding() {
+    const res = await this.db.query("SELECT value FROM platform_settings WHERE key = 'branding'").catch(() => ({ rows: [] as Body[] }));
+    const value = res.rows[0]?.value || {};
+    return {
+      productName: String(value.productName || "Tesbo Test Manager"),
+      logoUrl: String(value.logoUrl || "/tesbo-test-manager-logo.png")
+    };
+  }
+
+  async adminBranding(userId: string | null | undefined) {
+    await this.requirePlatformAdmin(userId);
+    return this.publicBranding();
+  }
+
+  async updateAdminBranding(userId: string | null | undefined, body: Body) {
+    const uid = await this.requirePlatformAdmin(userId);
+    const logoUrl = String(body.logoUrl || "").trim();
+    const productName = String(body.productName || "Tesbo Test Manager").trim() || "Tesbo Test Manager";
+    if (logoUrl && !/^data:image\/(png|jpe?g|webp|svg\+xml);base64,/i.test(logoUrl) && !logoUrl.startsWith("/")) {
+      throw new BadRequestException({ error: "Logo must be an uploaded image data URL or a public app asset path." });
+    }
+    if (logoUrl.length > 2_500_000) {
+      throw new BadRequestException({ error: "Logo is too large. Upload an image below 2 MB." });
+    }
+    const value = {
+      productName,
+      logoUrl: logoUrl || "/tesbo-test-manager-logo.png"
+    };
+    await this.db.query(
+      `INSERT INTO platform_settings (key, value, updated_by, updated_at)
+       VALUES ('branding', $1::jsonb, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [JSON.stringify(value), uid]
+    );
+    return value;
   }
 
   async addAdmin(body: Body, grantedBy?: string | null) {
@@ -2039,6 +2083,7 @@ export class LegacyService {
       "Review existing testcases before generating. Do not duplicate existing coverage; instead fill gaps, deepen weak coverage, or create clearly distinct edge cases.",
       "Prioritize edge cases, boundary values, negative paths, permissions, data integrity, state transitions, and traceability.",
       "Return only valid JSON matching this shape: {\"drafts\":[{\"title\":\"\",\"preconditions\":\"\",\"stepsJson\":\"[]\",\"expectedSummary\":\"\",\"priority\":\"P1|P2|P3\",\"tags\":[\"\"]}]}",
+      "Do not include markdown fences, explanations, comments, or text before or after the JSON object.",
       "stepsJson must be a JSON string containing an array of step objects with step, action, and expected fields."
     ].join("\n");
   }
@@ -2079,7 +2124,7 @@ export class LegacyService {
   private normalizeAiDrafts(raw: unknown, requestedCount: number): Body[] {
     let parsed: unknown;
     try {
-      const text = typeof raw === "string" ? raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim() : raw;
+      const text = typeof raw === "string" ? this.extractJsonPayload(raw) : raw;
       parsed = typeof text === "string" ? JSON.parse(text) : text;
     } catch {
       throw new BadRequestException({ error: "AI testcase generation returned invalid JSON" });
@@ -2098,6 +2143,51 @@ export class LegacyService {
         tags
       };
     });
+  }
+
+  private extractJsonPayload(raw: string): string {
+    const text = raw.trim();
+    if (!text) return text;
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = (fenced?.[1] || text).trim();
+    if (candidate.startsWith("{") || candidate.startsWith("[")) {
+      const balanced = this.extractBalancedJson(candidate);
+      if (balanced) return balanced;
+    }
+    const firstObject = candidate.indexOf("{");
+    const firstArray = candidate.indexOf("[");
+    const starts = [firstObject, firstArray].filter((index) => index >= 0);
+    if (!starts.length) return candidate;
+    const start = Math.min(...starts);
+    return this.extractBalancedJson(candidate.slice(start)) || candidate.slice(start).trim();
+  }
+
+  private extractBalancedJson(text: string): string | null {
+    const open = text[0];
+    const close = open === "{" ? "}" : open === "[" ? "]" : "";
+    if (!close) return null;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === "\"") inString = false;
+        continue;
+      }
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+      if (char === open) depth += 1;
+      else if (char === close) {
+        depth -= 1;
+        if (depth === 0) return text.slice(0, index + 1);
+      }
+    }
+    return null;
   }
 
   private async generateZyraWithOpenAi(params: {

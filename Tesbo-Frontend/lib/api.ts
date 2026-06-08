@@ -86,6 +86,23 @@ export async function getSystemHealth() {
   }>("/api/admin/system/health");
 }
 
+export type BrandingSettings = {
+  productName: string;
+  logoUrl: string;
+};
+
+export async function getBranding(): Promise<BrandingSettings> {
+  return api<BrandingSettings>("/api/branding");
+}
+
+export async function getAdminBranding(): Promise<BrandingSettings> {
+  return api<BrandingSettings>("/api/admin/branding");
+}
+
+export async function updateAdminBranding(data: BrandingSettings): Promise<BrandingSettings> {
+  return api<BrandingSettings>("/api/admin/branding", { method: "PATCH", body: data });
+}
+
 export async function getAdminList() {
   return api<
     Array<{
@@ -1814,7 +1831,7 @@ export async function listActivity(
   );
 }
 
-// ── Tesbo Reports module ──────────────────────────────────────────────────────
+// ── Tesbo Test Manager reports module ─────────────────────────────────────────
 
 export interface TesboRunSummary {
   id: string;
@@ -2091,7 +2108,7 @@ export async function ingestTesboPlaywrightUpload(projectId: string, file: File)
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || "Failed to upload Tesbo result file");
+    throw new Error(text || "Failed to upload Tesbo Test Manager result file");
   }
   return res.json() as Promise<{ runId: string }>;
 }
@@ -2117,7 +2134,7 @@ export async function uploadTesboCaseArtifact(
   );
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || "Failed to upload Tesbo artifact");
+    throw new Error(text || "Failed to upload Tesbo Test Manager artifact");
   }
   return res.json() as Promise<{ caseId: string; kind: string; url: string }>;
 }

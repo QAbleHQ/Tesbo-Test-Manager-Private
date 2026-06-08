@@ -681,6 +681,21 @@ export class LegacyController {
     return this.legacy.adminList();
   }
 
+  @Get("/api/branding")
+  branding() {
+    return this.legacy.publicBranding();
+  }
+
+  @Get("/api/admin/branding")
+  adminBranding(@Req() req: AuthenticatedRequest) {
+    return this.legacy.adminBranding(req.userId);
+  }
+
+  @Patch("/api/admin/branding")
+  updateAdminBranding(@Req() req: AuthenticatedRequest, @Body() body: Record<string, any>) {
+    return this.legacy.updateAdminBranding(req.userId, body);
+  }
+
   @Post("/api/admin/admins")
   addAdmin(@Req() req: AuthenticatedRequest, @Body() body: Record<string, any>) {
     return this.legacy.addAdmin(body, req.userId);

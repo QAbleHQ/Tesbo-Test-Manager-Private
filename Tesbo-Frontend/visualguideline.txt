@@ -1,8 +1,8 @@
-# Tesbo Visual Language Spec
+# Tesbo Test Manager Visual Language Spec
 
 ## Product Positioning
 
-Tesbo is not a QA admin dashboard. It is a control plane for autonomous testing operations.
+Tesbo Test Manager is not a QA admin dashboard. It is a control plane for autonomous testing operations.
 
 The interface must communicate three things at all times:
 
@@ -26,7 +26,7 @@ Avoid anything playful, soft-SaaS, generic enterprise, glassy sci-fi, or chatbot
 
 ## Core Theme Name
 
-**Tesbo Command Light**
+**Tesbo Test Manager Command Light**
 
 A light-theme visual system with strong type, structured surfaces, visible operational state, and a dedicated AI accent layer.
 
@@ -245,7 +245,7 @@ Must include:
 * User/account area
 
 Command bar placeholder:
-`Ask Tesbo or run a command`
+`Ask Tesbo Test Manager or run a command`
 
 Examples:
 
@@ -418,15 +418,15 @@ Structure:
 * One-line state summary
 * One-line supporting explanation
 * Primary action
-* Optional “ask Tesbo” action
+* Optional “ask Tesbo Test Manager” action
 
 Example:
 `No tasks in queue`
-`Queue scenarios for automation or ask Tesbo to identify high-value candidates.`
+`Queue scenarios for automation or ask Tesbo Test Manager to identify high-value candidates.`
 
 ---
 
-## Signature Tesbo Patterns
+## Signature Tesbo Test Manager Patterns
 
 ## 1. Agent Accent Edge
 
@@ -718,4 +718,4 @@ Implement the frontend using reusable design tokens and shared primitives.
 
 ## One-Line North Star
 
-Tesbo should feel like a precision control plane for autonomous testing systems, where agents execute, humans approve, and every screen makes operational progress visible.
+Tesbo Test Manager should feel like a precision control plane for autonomous testing systems, where agents execute, humans approve, and every screen makes operational progress visible.

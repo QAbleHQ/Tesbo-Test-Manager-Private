@@ -1,5 +1,5 @@
 
-# Tesbo UI/UX Validation Report
+# Tesbo Test Manager UI/UX Validation Report
 Generated: 2026-02-21T08:05:40.220Z
 
 ## Summary
@@ -32,11 +32,11 @@ Generated: 2026-02-21T08:05:40.220Z
 - H2: Project catalogue
 
 **Local**:
-- H1: Tesbo Runs
+- H1: Tesbo Test Manager Runs
 - H2: Build history
 
 **Missing in Local**: ["Project catalogue"]
-**Extra in Local**: ["Tesbo Runs","Build history"]
+**Extra in Local**: ["Tesbo Test Manager Runs","Build history"]
 
 ---
 
@@ -146,7 +146,7 @@ See attached screenshots:
 ```json
 {
   "url": "https://portal.tesbo.io/projects",
-  "title": "Tesbo Cloud Reporting",
+  "title": "Tesbo Test Manager Cloud Reporting",
   "headings": [
     {
       "tag": "H2",
@@ -255,11 +255,11 @@ See attached screenshots:
 ```json
 {
   "url": "http://localhost:3000/projects/4804a8b3-7c9c-4f2d-807f-c52ba1a2380f/tesbo-reports/runs",
-  "title": "Tesbo",
+  "title": "Tesbo Test Manager",
   "headings": [
     {
       "tag": "H1",
-      "text": "Tesbo Runs"
+      "text": "Tesbo Test Manager Runs"
     },
     {
       "tag": "H2",
@@ -374,7 +374,7 @@ See attached screenshots:
   "runDetailHeadings": [
     {
       "tag": "H1",
-      "text": "Tesbo Runs"
+      "text": "Tesbo Test Manager Runs"
     },
     {
       "tag": "H2",
@@ -418,7 +418,7 @@ See attached screenshots:
     "local": [
       {
         "tag": "H1",
-        "text": "Tesbo Runs"
+        "text": "Tesbo Test Manager Runs"
       },
       {
         "tag": "H2",
@@ -430,7 +430,7 @@ See attached screenshots:
         "Project catalogue"
       ],
       "extraInLocal": [
-        "Tesbo Runs",
+        "Tesbo Test Manager Runs",
         "Build history"
       ]
     }

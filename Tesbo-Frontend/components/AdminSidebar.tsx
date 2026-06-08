@@ -166,7 +166,7 @@ export default function AdminSidebar() {
         <Link
           href="/admin"
           className={`flex items-center gap-2 ${isCollapsed ? "justify-center" : ""}`}
-          aria-label="Tesbo Admin"
+          aria-label="Tesbo Test Manager Admin"
         >
           {isCollapsed ? (
             <span className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface-strong)] text-sm font-bold text-[var(--brand-primary)] shadow-sm">
@@ -181,7 +181,7 @@ export default function AdminSidebar() {
                 />
               </span>
               <span className="text-[15px] font-bold text-[var(--foreground)]">
-                Tesbo Admin
+                Tesbo Test Manager Admin
               </span>
             </div>
           )}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent local PostgreSQL setup for Tesbo.
+# Idempotent local PostgreSQL setup for Tesbo Test Manager.
 # - Prefers Docker Compose postgres service (project default)
 # - Falls back to local psql if Docker is unavailable
 #
@@ -38,7 +38,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "Setting up PostgreSQL for Tesbo..."
+echo "Setting up PostgreSQL for Tesbo Test Manager..."
 
 if command -v docker >/dev/null 2>&1; then
   echo "Docker detected. Starting postgres service..."

@@ -1,4 +1,4 @@
-# Tesbo one-command local deployment.
+# Tesbo Test Manager one-command local deployment.
 #
 # Start everything:
 #   docker-compose up --build -d

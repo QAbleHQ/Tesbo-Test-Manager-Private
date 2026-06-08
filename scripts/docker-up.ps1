@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-Write-Host "Starting Tesbo frontend, Nest backend, and database with Docker Compose..."
+Write-Host "Starting Tesbo Test Manager frontend, Nest backend, and database with Docker Compose..."
 if (Get-Command docker -ErrorAction SilentlyContinue) {
   docker compose version *> $null
   if ($LASTEXITCODE -eq 0) {
@@ -20,7 +20,7 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
 }
 
 Write-Host ""
-Write-Host "Tesbo is starting."
+Write-Host "Tesbo Test Manager is starting."
 Write-Host "Frontend: http://localhost:1010"
 Write-Host "Backend health: http://localhost:1011/health"
 Write-Host ""

@@ -1,7 +1,7 @@
 {
   "name": "tesbo-ui-validation",
   "version": "1.0.0",
-  "description": "Automated UI/UX validation for Tesbo run-report pages",
+  "description": "Automated UI/UX validation for Tesbo Test Manager run-report pages",
   "main": "tesbo-validation-script.js",
   "scripts": {
     "validate": "node tesbo-validation-script.js",

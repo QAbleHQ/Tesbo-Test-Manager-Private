@@ -1,4 +1,4 @@
-# Tesbo UI/UX Validation - Deliverables Summary
+# Tesbo Test Manager UI/UX Validation - Deliverables Summary
 
 ## What Was Requested
 Validate UI/UX differences between:
@@ -88,7 +88,7 @@ node tesbo-validation-script.js
 Based on analysis of your local implementation code, here's what **should** exist in localhost:
 
 ### Runs List Page Features
-✅ **Navigation**: "Tesbo Runs" title, "Back to Tesbo Reports" link
+✅ **Navigation**: "Tesbo Test Manager Runs" title, "Back to Tesbo Test Manager Reports" link
 ✅ **Actions**: Upload build file, Refresh, Ingest sample
 ✅ **Search**: Full-text search across name, branch, PR, author, run#
 ✅ **Filters**: 

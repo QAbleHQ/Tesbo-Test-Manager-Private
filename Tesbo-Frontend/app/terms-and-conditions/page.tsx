@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Terms and Conditions | Tesbo",
-  description: "Terms and Conditions for Tesbo and Jira integration.",
+  title: "Terms and Conditions | Tesbo Test Manager",
+  description: "Terms and Conditions for Tesbo Test Manager and Jira integration.",
 };
 
 export default function TermsAndConditionsPage() {
@@ -17,7 +17,7 @@ export default function TermsAndConditionsPage() {
           <section>
             <h2 className="text-lg font-semibold text-[var(--foreground)]">1. Acceptance</h2>
             <p className="mt-2">
-              By using Tesbo, you agree to these Terms and Conditions. If you do not agree, do not use the
+              By using Tesbo Test Manager, you agree to these Terms and Conditions. If you do not agree, do not use the
               service.
             </p>
           </section>
@@ -25,7 +25,7 @@ export default function TermsAndConditionsPage() {
           <section>
             <h2 className="text-lg font-semibold text-[var(--foreground)]">2. Service Overview</h2>
             <p className="mt-2">
-              Tesbo is a test management and collaboration platform that includes project workspaces, test case
+              Tesbo Test Manager is a test management and collaboration platform that includes project workspaces, test case
               management, planning and execution workflows, reporting, optional AI-assisted features, and Jira
               integration.
             </p>
@@ -45,8 +45,8 @@ export default function TermsAndConditionsPage() {
               4. Customer Data and Ownership
             </h2>
             <p className="mt-2">
-              You retain ownership of the data you submit to Tesbo, including test artifacts and Jira-linked
-              records. You grant Tesbo a limited right to process this data only as needed to operate and improve
+              You retain ownership of the data you submit to Tesbo Test Manager, including test artifacts and Jira-linked
+              records. You grant Tesbo Test Manager a limited right to process this data only as needed to operate and improve
               the service.
             </p>
           </section>
@@ -54,7 +54,7 @@ export default function TermsAndConditionsPage() {
           <section>
             <h2 className="text-lg font-semibold text-[var(--foreground)]">5. Jira Integration</h2>
             <p className="mt-2">
-              If you connect Jira, you authorize Tesbo to access and process Jira data that you permit through
+              If you connect Jira, you authorize Tesbo Test Manager to access and process Jira data that you permit through
               Atlassian OAuth. You are responsible for ensuring your use of integration features complies with your
               organization&apos;s policies and Atlassian terms.
             </p>
@@ -75,7 +75,7 @@ export default function TermsAndConditionsPage() {
               7. Availability and Changes
             </h2>
             <p className="mt-2">
-              We may modify, suspend, or discontinue parts of Tesbo from time to time. We aim to maintain
+              We may modify, suspend, or discontinue parts of Tesbo Test Manager from time to time. We aim to maintain
               reliable availability but do not guarantee uninterrupted operation.
             </p>
           </section>
@@ -83,7 +83,7 @@ export default function TermsAndConditionsPage() {
           <section>
             <h2 className="text-lg font-semibold text-[var(--foreground)]">8. Disclaimers</h2>
             <p className="mt-2">
-              Tesbo is provided on an &quot;as is&quot; and &quot;as available&quot; basis to the fullest extent permitted by
+              Tesbo Test Manager is provided on an &quot;as is&quot; and &quot;as available&quot; basis to the fullest extent permitted by
               law. We disclaim all implied warranties, including merchantability, fitness for a particular purpose, and
               non-infringement.
             </p>
@@ -94,7 +94,7 @@ export default function TermsAndConditionsPage() {
               9. Limitation of Liability
             </h2>
             <p className="mt-2">
-              To the maximum extent permitted by law, Tesbo and its affiliates are not liable for indirect,
+              To the maximum extent permitted by law, Tesbo Test Manager and its affiliates are not liable for indirect,
               incidental, special, consequential, or punitive damages, or for loss of profits, revenues, or data.
             </p>
           </section>
@@ -110,7 +110,7 @@ export default function TermsAndConditionsPage() {
           <section>
             <h2 className="text-lg font-semibold text-[var(--foreground)]">11. Updates to Terms</h2>
             <p className="mt-2">
-              We may update these terms periodically. Continued use of Tesbo after updates means you accept the
+              We may update these terms periodically. Continued use of Tesbo Test Manager after updates means you accept the
               revised terms.
             </p>
           </section>

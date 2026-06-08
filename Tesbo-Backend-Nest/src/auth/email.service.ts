@@ -19,8 +19,8 @@ export class EmailService {
       body: JSON.stringify({
         From: this.config.postmarkFromEmail,
         To: to,
-        Subject: "Your Tesbo verification code",
-        TextBody: `Your Tesbo verification code is ${code}. It expires in ${this.config.otpExpiryMinutes} minutes.`
+        Subject: "Your Tesbo Test Manager verification code",
+        TextBody: `Your Tesbo Test Manager verification code is ${code}. It expires in ${this.config.otpExpiryMinutes} minutes.`
       })
     });
     if (!response.ok) {

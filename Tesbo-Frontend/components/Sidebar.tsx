@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { authMe, listProjects, logout, type ProjectSummary } from "@/lib/api";
+import { BrandLogo } from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 
 type NavItemConfig = {
@@ -250,16 +250,13 @@ function SidebarContent() {
       }`}
     >
       <div className="flex h-16 items-center justify-between gap-2 border-b border-[var(--glass-border)] px-3">
-        <Link href="/projects" className={`flex items-center ${isCollapsed ? "justify-center" : ""}`} aria-label="Tesbo">
+        <Link href="/projects" className={`flex items-center ${isCollapsed ? "justify-center" : ""}`} aria-label="Tesbo Test Manager">
           {isCollapsed ? (
-            <span className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface-strong)] text-sm font-bold text-[var(--brand-primary)] shadow-sm">TX</span>
-          ) : (
-            <span className="flex items-center gap-2.5">
-              <span className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface-strong)] shadow-sm">
-                <Image src="/tesbox-logo-transparent.png" alt="" width={26} height={26} priority className="h-6 w-auto" />
-              </span>
-              <Image src="/tesbox-logo-transparent.png" alt="Tesbo" width={108} height={30} priority className="h-7 w-auto" />
+            <span className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface-strong)] shadow-sm">
+              <BrandLogo decorative className="h-7 w-auto object-contain" />
             </span>
+          ) : (
+            <BrandLogo className="h-10 max-w-[150px] object-contain" />
           )}
         </Link>
         <button

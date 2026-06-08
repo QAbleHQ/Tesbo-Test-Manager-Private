@@ -1,10 +1,10 @@
-# Tesbo - AI-Powered Test Case Management
+# Tesbo Test Manager - AI-Powered Test Case Management
 
-Tesbo is exclusively developed by [QAble Testlab](https://qable.io).
+Tesbo Test Manager is exclusively developed by [QAble Testlab](https://qable.io).
 
 ## License
 
-Tesbo is open source under the Apache License 2.0.
+Tesbo Test Manager is open source under the Apache License 2.0.
 
 You may use, modify, distribute, self-host, and commercially use this software, subject to the terms of the Apache-2.0 license. See `LICENSE`.
 
@@ -19,7 +19,7 @@ You may use, modify, distribute, self-host, and commercially use this software, 
 
 ### Prerequisites
 
-Before starting Tesbo with Docker, install:
+Before starting Tesbo Test Manager with Docker, install:
 
 - **Docker** - container runtime for PostgreSQL, Redis, backend, frontend, and the database migrator.
 - **Docker Compose** - multi-container runner used by `docker-compose.yml`.

@@ -3,8 +3,8 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import Image from "next/image";
 import { getSetupStatus, loginWithPassword, requestOtp } from "@/lib/api";
+import { BrandLogo } from "@/components/BrandLogo";
 import { Button, Field, FieldError, FieldHint, FieldLabel, Input } from "@/components/ui";
 
 function LoginForm() {
@@ -80,14 +80,7 @@ function LoginForm() {
     <div className="min-h-screen flex items-center justify-center bg-[var(--background)] px-4">
       <div className="w-full max-w-sm space-y-8">
         <div className="text-center">
-          <Image
-            src="/tesbox-logo-transparent.png"
-            alt="Tesbo"
-            width={280}
-            height={80}
-            priority
-            className="mx-auto h-14 w-auto"
-          />
+          <BrandLogo className="mx-auto h-14 max-w-[280px] object-contain" />
           <p className="mt-1 text-sm text-[var(--muted)]">
             {otpMode ? "Sign in with a one-time code" : "Sign in with your admin password"}
           </p>

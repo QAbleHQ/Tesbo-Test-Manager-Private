@@ -3,12 +3,12 @@ import "./globals.css";
 import { THEME_STORAGE_KEY } from "@/lib/theme";
 
 export const metadata: Metadata = {
-  title: "Tesbo",
+  title: "Tesbo Test Manager",
   description: "AI-Powered Test Case Management",
   icons: {
-    icon: "/tesbox-logo-transparent.png",
-    shortcut: "/tesbox-logo-transparent.png",
-    apple: "/tesbox-logo-transparent.png",
+    icon: "/tesbo-test-manager-logo.png",
+    shortcut: "/tesbo-test-manager-logo.png",
+    apple: "/tesbo-test-manager-logo.png",
   },
 };
 

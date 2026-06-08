@@ -1,12 +1,12 @@
-# Contributing to Tesbo
+# Contributing to Tesbo Test Manager
 
-Thanks for helping improve Tesbo.
+Thanks for helping improve Tesbo Test Manager.
 
-Tesbo is exclusively developed and maintained by QAble Testlab.
+Tesbo Test Manager is exclusively developed and maintained by QAble Testlab.
 
 ## Development
 
-Tesbo is a monorepo with three main services:
+Tesbo Test Manager is a monorepo with three main services:
 
 - `Tesbo-Frontend/` - Next.js frontend
 - `Tesbo-Backend/` - Java 17 backend
@@ -34,4 +34,4 @@ mvn test
 
 ## License
 
-Tesbo is licensed under the Apache License 2.0. See `LICENSE`.
+Tesbo Test Manager is licensed under the Apache License 2.0. See `LICENSE`.

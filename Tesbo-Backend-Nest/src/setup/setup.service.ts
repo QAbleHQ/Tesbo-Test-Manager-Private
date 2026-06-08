@@ -106,7 +106,7 @@ export class SetupService {
     const project = await client.query<{ id: string }>(
       `
       INSERT INTO projects (organization_id, key, name, description)
-      VALUES ($1, 'DEMO', 'Demo QA Project', 'Sample project with starter test cases for exploring Tesbo.')
+      VALUES ($1, 'DEMO', 'Demo QA Project', 'Sample project with starter test cases for exploring Tesbo Test Manager.')
       RETURNING id
       `,
       [organizationId]
@@ -135,7 +135,7 @@ export class SetupService {
       userId,
       "DEMO-TC-2",
       "Create a new project",
-      "Verify an owner can create a Tesbo project with name and key.",
+      "Verify an owner can create a Tesbo Test Manager project with name and key.",
       "P2"
     );
     await this.insertDemoTestCase(
@@ -179,7 +179,7 @@ export class SetupService {
         externalId,
         title,
         description,
-        "Fresh Tesbo deployment is available.",
+        "Fresh Tesbo Test Manager deployment is available.",
         JSON.stringify(steps),
         "Use the initial admin account created during setup.",
         priority,

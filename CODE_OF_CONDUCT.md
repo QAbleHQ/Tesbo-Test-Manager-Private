@@ -1,6 +1,6 @@
 # Code of Conduct
 
-Tesbo contributors are expected to keep project spaces respectful, constructive, and focused on improving the software.
+Tesbo Test Manager contributors are expected to keep project spaces respectful, constructive, and focused on improving the software.
 
 ## Expected Behavior
 
