@@ -9,7 +9,6 @@ export type RepoTcColumnId =
   | "id"
   | "title"
   | "suite"
-  | "run"
   | "jira"
   | "priority"
   | "status"
@@ -22,7 +21,6 @@ const DATA_COLUMN_IDS: RepoDataColumnId[] = [
   "id",
   "title",
   "suite",
-  "run",
   "jira",
   "priority",
   "status",
@@ -35,7 +33,6 @@ const COLUMN_LABELS: Record<RepoTcColumnId, string> = {
   id: "ID",
   title: "Test case title",
   suite: "Suite",
-  run: "Run this test case",
   jira: "Jira",
   priority: "Priority",
   status: "Status",
@@ -47,7 +44,6 @@ const FIELD_IDS: Record<RepoDataColumnId, string> = {
   id: "id",
   title: "title",
   suite: "suite",
-  run: "run",
   jira: "jira",
   priority: "priority",
   status: "status",
@@ -59,7 +55,6 @@ const DEFAULT_DATA_ORDER: RepoDataColumnId[] = [
   "id",
   "title",
   "suite",
-  "run",
   "jira",
   "priority",
   "status",
@@ -67,19 +62,17 @@ const DEFAULT_DATA_ORDER: RepoDataColumnId[] = [
   "type",
 ];
 
-/** First five data columns shown by default; remainder off until the user enables them (saved in localStorage). */
+/** Default data columns shown first; remainder off until the user enables them (saved in localStorage). */
 const DEFAULT_ON_DATA_COLUMNS: ReadonlySet<RepoDataColumnId> = new Set([
   "id",
   "title",
   "suite",
-  "run",
 ]);
 
 const DEFAULT_VISIBLE: Record<RepoDataColumnId, boolean> = {
   id: true,
   title: true,
   suite: true,
-  run: true,
   jira: false,
   priority: false,
   status: false,
@@ -87,35 +80,11 @@ const DEFAULT_VISIBLE: Record<RepoDataColumnId, boolean> = {
   type: false,
 };
 
-/** When exactly these five (+ row select) are visible, the table uses full width and percentage columns to fit the screen. */
-function isDefaultFiveOnlyView(visible: Record<RepoDataColumnId, boolean>): boolean {
-  for (const id of DATA_COLUMN_IDS) {
-    const shouldShow = DEFAULT_ON_DATA_COLUMNS.has(id);
-    if (visible[id] !== shouldShow) return false;
-  }
-  return true;
-}
-
-/** Percent widths for select + default five; must sum to 100. */
-const FIT_LAYOUT_PCT: Record<RepoTcColumnId, number> = {
-  select: 4,
-  id: 9,
-  title: 42,
-  suite: 21,
-  run: 24,
-  jira: 0,
-  priority: 0,
-  status: 0,
-  updated: 0,
-  type: 0,
-};
-
 const DEFAULT_WIDTHS: Record<RepoTcColumnId, number> = {
   select: 44,
   id: 112,
-  title: 240,
+  title: 360,
   suite: 160,
-  run: 148,
   jira: 112,
   priority: 88,
   status: 112,
@@ -126,9 +95,8 @@ const DEFAULT_WIDTHS: Record<RepoTcColumnId, number> = {
 const MIN_WIDTHS: Record<RepoTcColumnId, number> = {
   select: 40,
   id: 72,
-  title: 140,
+  title: 180,
   suite: 96,
-  run: 120,
   jira: 80,
   priority: 72,
   status: 88,
@@ -225,7 +193,6 @@ export type RepositoryTestCaseTableProps = {
   onToggleSelectAll: () => void;
   onToggleCase: (id: string) => void;
   onOpenRow: (id: string) => void;
-  onRunSingle: (id: string) => void;
 };
 
 export function RepositoryTestCaseTable({
@@ -238,7 +205,6 @@ export function RepositoryTestCaseTable({
   onToggleSelectAll,
   onToggleCase,
   onOpenRow,
-  onRunSingle,
 }: RepositoryTestCaseTableProps) {
   const [dataOrder, setDataOrder] = useState<RepoDataColumnId[]>(DEFAULT_DATA_ORDER);
   const [visible, setVisible] = useState<Record<RepoDataColumnId, boolean>>(DEFAULT_VISIBLE);
@@ -326,9 +292,6 @@ export function RepositoryTestCaseTable({
     [visibleDataColumns],
   );
 
-  /** Full-width percentage layout only when the five default data columns are exactly what is shown. */
-  const fitDefaultFiveToScreen = useMemo(() => isDefaultFiveOnlyView(visible), [visible]);
-
   const totalWidth = useMemo(
     () => orderedColumns.reduce((sum, id) => sum + widths[id], 0),
     [orderedColumns, widths],
@@ -355,9 +318,7 @@ export function RepositoryTestCaseTable({
     const w = widths[col];
     const label = COLUMN_LABELS[col];
     const isData = col !== "select";
-    const thSizing = fitDefaultFiveToScreen
-      ? { width: `${FIT_LAYOUT_PCT[col]}%`, position: "relative" as const }
-      : { width: w, minWidth: w, maxWidth: w, position: "relative" as const };
+    const thSizing = { width: w, minWidth: w, maxWidth: w, position: "relative" as const };
 
     return (
       <th
@@ -434,24 +395,20 @@ export function RepositoryTestCaseTable({
             <span className="truncate">{label}</span>
           )}
         </div>
-        {!fitDefaultFiveToScreen && (
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label={`Resize ${label} column`}
-            className="absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize hover:bg-[var(--brand-primary)]/15"
-            onMouseDown={(e) => startResize(col, e)}
-          />
-        )}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={`Resize ${label} column`}
+          className="absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize hover:bg-[var(--brand-primary)]/15"
+          onMouseDown={(e) => startResize(col, e)}
+        />
       </th>
     );
   }
 
   function renderBodyCell(col: RepoTcColumnId, tc: TestCaseListItem) {
     const w = widths[col];
-    const tdStyle = fitDefaultFiveToScreen
-      ? { width: `${FIT_LAYOUT_PCT[col]}%` }
-      : { width: w };
+    const tdStyle = { width: w };
     const cellClass = "min-w-0 align-middle";
     const innerTruncate = "block max-w-full truncate whitespace-nowrap";
 
@@ -483,7 +440,17 @@ export function RepositoryTestCaseTable({
       case "title":
         return (
           <td key={col} style={tdStyle} className={cellClass}>
-            <button type="button" onClick={() => void onOpenRow(tc.id)} className={`${innerTruncate} text-left hover:underline`}>
+            <button
+              type="button"
+              onClick={() => void onOpenRow(tc.id)}
+              title={tc.title}
+              className="block max-w-full overflow-hidden whitespace-normal break-words text-left leading-5 hover:underline"
+              style={{
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+              }}
+            >
               {tc.title}
             </button>
           </td>
@@ -492,23 +459,6 @@ export function RepositoryTestCaseTable({
         return (
           <td key={col} style={tdStyle} className={`${cellClass} text-[var(--muted)]`}>
             <span className={innerTruncate}>{tc.suiteId ? suiteNameMap.get(tc.suiteId) ?? "—" : "—"}</span>
-          </td>
-        );
-      case "run":
-        return (
-          <td key={col} style={tdStyle} className={cellClass}>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onRunSingle(tc.id);
-              }}
-              className="border-[var(--success-border)] text-[var(--success)] hover:bg-[var(--success-soft)]"
-              title="Run this test case in live preview"
-            >
-              Run this test case
-            </Button>
           </td>
         );
       case "jira":
@@ -575,7 +525,7 @@ export function RepositoryTestCaseTable({
             {visibleDataColumns.length} of {DATA_COLUMN_IDS.length} fields shown
           </StatusChip>
           <p className="text-xs text-[var(--muted)]">
-            Drag headers to reorder. Resize columns when using expanded table mode.
+            Drag headers to reorder. Drag header edges to resize columns.
           </p>
         </div>
         <div ref={columnsMenuRef} className="relative">
@@ -606,7 +556,7 @@ export function RepositoryTestCaseTable({
               ))}
               <p className="mt-2 border-t border-[var(--border-subtle)] px-3 pt-2 text-[11px] text-[var(--muted)]">
                 {
-                  "With only the first five fields visible (ID through Run), the table fills the screen width. Adding or removing fields switches to fixed widths and horizontal scroll when needed. The selection column stays first. Drag headers to reorder; drag header edges to resize when not in full-width mode."
+                  "The selection column stays first. Drag headers to reorder data fields, and drag header edges to resize columns."
                 }
               </p>
             </div>
@@ -618,7 +568,8 @@ export function RepositoryTestCaseTable({
         <table
           className="tesbo-table max-w-full text-sm"
           style={{
-            width: fitDefaultFiveToScreen ? "100%" : totalWidth,
+            width: totalWidth,
+            minWidth: "100%",
             tableLayout: "fixed",
           }}
         >
@@ -626,11 +577,7 @@ export function RepositoryTestCaseTable({
             {orderedColumns.map((col) => (
               <col
                 key={col}
-                style={
-                  fitDefaultFiveToScreen
-                    ? { width: `${FIT_LAYOUT_PCT[col]}%` }
-                    : { width: widths[col] }
-                }
+                style={{ width: widths[col] }}
               />
             ))}
           </colgroup>

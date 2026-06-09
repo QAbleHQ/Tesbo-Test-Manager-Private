@@ -36,6 +36,7 @@ type ProjectSettingsPayload = {
   };
   jiraAutoComment?: boolean;
   jiraTicketSelector?: boolean;
+  testcaseIdPrefix?: string;
   testRunEnvironments?: Array<{
     name?: string;
     url?: string;
@@ -81,6 +82,7 @@ export default function ProjectSettingsPage() {
   const [description, setDescription] = useState("");
   const [jiraAutoComment, setJiraAutoComment] = useState(false);
   const [jiraTicketSelector, setJiraTicketSelector] = useState(false);
+  const [testcaseIdPrefix, setTestcaseIdPrefix] = useState("");
   const [testRunEnvironments, setTestRunEnvironments] = useState<TestEnvironmentSetting[]>([]);
   const [newEnvironmentName, setNewEnvironmentName] = useState("");
   const [newEnvironmentUrl, setNewEnvironmentUrl] = useState("");
@@ -137,6 +139,7 @@ export default function ProjectSettingsPage() {
   }, [activeTab, jiraTabEnabled]);
 
   function parseProjectSettings(raw: unknown): ProjectSettingsPayload {
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as ProjectSettingsPayload;
     if (typeof raw !== "string" || !raw.trim()) return {};
     try {
       const parsed = JSON.parse(raw) as ProjectSettingsPayload;
@@ -157,6 +160,10 @@ export default function ProjectSettingsPage() {
         return { name, url };
       })
       .filter((item): item is TestEnvironmentSetting => item !== null);
+  }
+
+  function normalizeTestcaseIdPrefix(value: string): string {
+    return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
   }
 
   const loadMembers = useCallback(async () => {
@@ -189,6 +196,7 @@ export default function ProjectSettingsPage() {
         const parsedSettings = parseProjectSettings(p.settings);
         setJiraAutoComment(parsedSettings.jiraAutoComment === true);
         setJiraTicketSelector(parsedSettings.jiraTicketSelector === true);
+        setTestcaseIdPrefix(normalizeTestcaseIdPrefix(String(parsedSettings.testcaseIdPrefix || p.key || "TC")));
         setTestRunEnvironments(normalizeTestRunEnvironments(parsedSettings.testRunEnvironments));
       }).catch(() => router.replace("/projects"));
       getJiraStatus(projectId).then(setJiraStatus).catch(() => {});
@@ -223,6 +231,7 @@ export default function ProjectSettingsPage() {
         ...currentSettings,
         jiraAutoComment,
         jiraTicketSelector,
+        testcaseIdPrefix: normalizeTestcaseIdPrefix(testcaseIdPrefix) || "TC",
         testRunEnvironments: environmentsToSave.map((item) => ({
           name: item.name.trim(),
           url: item.url.trim(),
@@ -236,6 +245,7 @@ export default function ProjectSettingsPage() {
       const refreshed = await getProject(projectId);
       setProject(refreshed);
       const refreshedSettings = parseProjectSettings(refreshed.settings);
+      setTestcaseIdPrefix(normalizeTestcaseIdPrefix(String(refreshedSettings.testcaseIdPrefix || refreshed.key || "TC")));
       setTestRunEnvironments(normalizeTestRunEnvironments(refreshedSettings.testRunEnvironments));
       setNewEnvironmentName("");
       setNewEnvironmentUrl("");
@@ -450,6 +460,20 @@ export default function ProjectSettingsPage() {
                     onChange={(e) => setDescription(e.target.value)}
                     rows={3}
                   />
+                </Field>
+                <Field>
+                  <FieldLabel>Test case ID prefix</FieldLabel>
+                  <Input
+                    type="text"
+                    value={testcaseIdPrefix}
+                    maxLength={3}
+                    onChange={(e) => setTestcaseIdPrefix(normalizeTestcaseIdPrefix(e.target.value))}
+                    placeholder="TC"
+                    className="max-w-32 font-mono uppercase"
+                  />
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    Max 3 letters or numbers. New test cases use this prefix, for example {testcaseIdPrefix || "TC"}-TC-1.
+                  </p>
                 </Field>
                 <Button type="submit" disabled={saving}>
                   {saving ? "Saving…" : "Save"}

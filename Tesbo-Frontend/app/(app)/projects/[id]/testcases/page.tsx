@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   authMe,
+  getProject,
   listTestCases,
   listSuites,
   createSuite,
@@ -59,6 +60,21 @@ type ViewMode = "bySuites" | "allCases";
 
 const EMPTY_STEP: Step = { stepNumber: 1, action: "", expectedResult: "" };
 
+function normalizeTestcaseIdPrefix(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3);
+}
+
+function parseProjectSettings(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function statusTone(s: string) {
   if (s === "Approved") return "success" as const;
   if (s === "In Review") return "warning" as const;
@@ -108,6 +124,8 @@ export default function TestCasesPage() {
   const [priority, setPriority] = useState("P2");
   const [status, setStatus] = useState("Draft");
   const [suiteId, setSuiteId] = useState("");
+  const [defaultTestcaseIdPrefix, setDefaultTestcaseIdPrefix] = useState("TC");
+  const [testcaseIdPrefix, setTestcaseIdPrefix] = useState("TC");
   const [panelJiraIssueKey, setPanelJiraIssueKey] = useState("");
   const [panelJiraUrl, setPanelJiraUrl] = useState("");
   const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
@@ -130,8 +148,15 @@ export default function TestCasesPage() {
   const [isImportExportMenuOpen, setIsImportExportMenuOpen] = useState(false);
   const importExportMenuRef = useRef<HTMLDivElement>(null);
   const loadData = useCallback(async () => {
-    const suiteList = await listSuites(projectId);
+    const [suiteList, project] = await Promise.all([
+      listSuites(projectId),
+      getProject(projectId),
+    ]);
+    const settings = parseProjectSettings(project.settings);
+    const prefix = normalizeTestcaseIdPrefix(String(settings.testcaseIdPrefix || project.key || "TC")) || "TC";
     setSuites(suiteList);
+    setDefaultTestcaseIdPrefix(prefix);
+    setTestcaseIdPrefix(prefix);
   }, [projectId]);
 
   useEffect(() => {
@@ -311,6 +336,7 @@ export default function TestCasesPage() {
     setPriority("P2");
     setStatus("Draft");
     setSuiteId(defaultSuiteId ?? activeSuiteId ?? "");
+    setTestcaseIdPrefix(defaultTestcaseIdPrefix);
     setPanelJiraIssueKey("");
     setPanelJiraUrl("");
   }
@@ -383,11 +409,6 @@ export default function TestCasesPage() {
 
   function updateStep(index: number, field: keyof Step, value: string | number) {
     setSteps((prev) => prev.map((step, i) => (i === index ? { ...step, [field]: value } : step)));
-  }
-
-  function openSingleTestRun(testcaseId: string) {
-    const rerunUrl = `/projects/${projectId}/testcases/${testcaseId}/rerun-live-preview`;
-    window.open(rerunUrl, "_blank", "noopener,noreferrer");
   }
 
   async function refreshData(pageOverride?: number) {
@@ -553,6 +574,7 @@ export default function TestCasesPage() {
           type,
           priority,
           status,
+          testcaseIdPrefix,
         });
         setSuiteCasesPage(1);
         setSuiteSearch("");
@@ -851,7 +873,6 @@ export default function TestCasesPage() {
                     onToggleSelectAll={toggleSelectAllCases}
                     onToggleCase={toggleCaseSelection}
                     onOpenRow={openViewPanel}
-                    onRunSingle={openSingleTestRun}
                   />
 
                   <Card className="flex items-center justify-between px-4 py-3 text-sm">
@@ -985,16 +1006,6 @@ export default function TestCasesPage() {
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {panelMode === "edit" && panelTestcaseId && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => openSingleTestRun(panelTestcaseId)}
-                    className="border-[var(--success)] text-[var(--success)]"
-                  >
-                    Run Test
-                  </Button>
-                )}
                 <button
                   type="button"
                   aria-label="Close panel"
@@ -1061,6 +1072,20 @@ export default function TestCasesPage() {
                       <Field>
                         <FieldLabel>Title <span className="text-[var(--error)]">*</span></FieldLabel>
                         <Input type="text" value={title} onChange={(e) => setTitle(e.target.value)} required placeholder="Describe what this test case validates" />
+                      </Field>
+                      <Field>
+                        <FieldLabel>Test case ID prefix</FieldLabel>
+                        <Input
+                          type="text"
+                          value={testcaseIdPrefix}
+                          maxLength={3}
+                          onChange={(e) => setTestcaseIdPrefix(normalizeTestcaseIdPrefix(e.target.value))}
+                          placeholder="TC"
+                          className="max-w-28 font-mono uppercase"
+                        />
+                        <p className="mt-1 text-xs text-[var(--muted)]">
+                          Max 3 letters or numbers. This can be changed before saving only.
+                        </p>
                       </Field>
                       <Field>
                         <FieldLabel>Description</FieldLabel>

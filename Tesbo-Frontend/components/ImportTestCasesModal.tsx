@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  createSuite,
   createTestCase,
   getTemplateUrl,
+  listTestCases,
+  listSuites,
   type ImportResult,
 } from "@/lib/api";
 
@@ -81,6 +84,8 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
   }, [open, reset]);
 
   const normalizeHeader = useCallback((value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ""), []);
+  const normalizeSuiteName = useCallback((value: string) => value.trim().replace(/\s+/g, " ").toLowerCase(), []);
+  const normalizeTitle = useCallback((value: string) => value.trim().replace(/\s+/g, " ").toLowerCase(), []);
 
   const autoMap = useCallback((headers: string[]) => {
     const map: Record<string, number> = {};
@@ -204,6 +209,34 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
       const activeSheet = preview.sheets.find((sheet) => sheet.name === selectedSheetName) || preview.sheets[0];
       const errors: { row: number; message: string }[] = [];
       let imported = 0;
+      const existingTitles = new Set<string>();
+      let offset = 0;
+      const limit = 500;
+      while (true) {
+        const { list, total } = await listTestCases(projectId, { limit, offset });
+        for (const testcase of list) {
+          existingTitles.add(normalizeTitle(testcase.title));
+        }
+        offset += list.length;
+        if (list.length === 0 || offset >= total) break;
+      }
+      const importTitles = new Set<string>();
+      const suiteByName = new Map<string, string>();
+      if (mapping.suite != null) {
+        const existingSuites = await listSuites(projectId);
+        for (const suite of existingSuites) {
+          suiteByName.set(normalizeSuiteName(suite.name), suite.id);
+        }
+      }
+      const resolveSuiteId = async (suiteName: string) => {
+        const normalized = normalizeSuiteName(suiteName);
+        if (!normalized) return undefined;
+        const existingSuiteId = suiteByName.get(normalized);
+        if (existingSuiteId) return existingSuiteId;
+        const suite = await createSuite(projectId, { name: suiteName.trim() });
+        suiteByName.set(normalized, suite.id);
+        return suite.id;
+      };
       for (const [index, row] of activeSheet.rows.entries()) {
         const valueFor = (field: string) => {
           const idx = mapping[field];
@@ -214,6 +247,16 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
           errors.push({ row: activeSheet.headerRowIndex + index + 2, message: "Title is required" });
           continue;
         }
+        const normalizedTitle = normalizeTitle(title);
+        if (existingTitles.has(normalizedTitle)) {
+          errors.push({ row: activeSheet.headerRowIndex + index + 2, message: "Skipped duplicate title: already exists in this project" });
+          continue;
+        }
+        if (importTitles.has(normalizedTitle)) {
+          errors.push({ row: activeSheet.headerRowIndex + index + 2, message: "Skipped duplicate title: repeated in this import file" });
+          continue;
+        }
+        importTitles.add(normalizedTitle);
         const stepsText = valueFor("steps");
         const steps = stepsText
           ? stepsText.split(/\r?\n|(?:\s*\|\s*)/).map((part, stepIndex) => ({
@@ -223,6 +266,7 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
             })).filter((step) => step.action)
           : [];
         try {
+          const suiteId = await resolveSuiteId(valueFor("suite"));
           await createTestCase(projectId, {
             title,
             description: valueFor("description"),
@@ -235,6 +279,7 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
             type: valueFor("type") || "Functional",
             status: valueFor("status") || "Draft",
             component: valueFor("component") || undefined,
+            suiteId,
           });
           imported += 1;
         } catch (err) {
@@ -523,7 +568,7 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
               {result.errors.length > 0 && (
                 <div>
                   <p className="mb-2 text-sm font-medium text-[var(--error-foreground)]">
-                    {result.errors.length} row{result.errors.length !== 1 ? "s" : ""} had errors:
+                    {result.errors.length} row{result.errors.length !== 1 ? "s" : ""} skipped or had errors:
                   </p>
                   <div className="max-h-48 overflow-y-auto rounded-lg border border-[var(--error-border)]">
                     <table className="w-full text-xs">

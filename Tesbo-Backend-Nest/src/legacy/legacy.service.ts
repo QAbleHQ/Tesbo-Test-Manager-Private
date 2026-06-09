@@ -5,6 +5,27 @@ import { DatabaseService } from "../database/database.service";
 
 type Body = Record<string, any>;
 
+function normalizeTestcaseIdPrefix(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 3);
+}
+
+function parseSettings(raw: unknown): Body {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === "object" && !Array.isArray(raw) ? raw as Body : {};
+}
+
 type ZyraGenerationInput = {
   story: string;
   context: string;
@@ -496,7 +517,7 @@ export class LegacyService {
   }
 
   async createTestCase(projectId: string, body: Body) {
-    const externalId = body.externalId || (await this.nextExternalId(projectId));
+    const externalId = body.externalId || (await this.nextExternalId(projectId, body.testcaseIdPrefix));
     const res = await this.db.query(
       `INSERT INTO testcases
        (project_id, suite_id, external_id, title, description, preconditions, postconditions, steps, test_data,
@@ -2543,9 +2564,13 @@ export class LegacyService {
     return res.rows[0].id;
   }
 
-  private async nextExternalId(projectId: string): Promise<string> {
-    const project = await this.db.query<{ key: string }>("SELECT key FROM projects WHERE id = $1", [projectId]);
-    const key = project.rows[0]?.key || "TC";
+  private async nextExternalId(projectId: string, requestedPrefix?: unknown): Promise<string> {
+    const project = await this.db.query<{ key: string; settings: unknown }>("SELECT key, settings FROM projects WHERE id = $1", [projectId]);
+    const settings = parseSettings(project.rows[0]?.settings);
+    const key = normalizeTestcaseIdPrefix(requestedPrefix)
+      || normalizeTestcaseIdPrefix(settings.testcaseIdPrefix)
+      || normalizeTestcaseIdPrefix(project.rows[0]?.key)
+      || "TC";
     const count = await this.db.query<{ count: string }>("SELECT COUNT(*) AS count FROM testcases WHERE project_id = $1", [projectId]);
     return `${key}-TC-${Number(count.rows[0]?.count || 0) + 1}`;
   }
