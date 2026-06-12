@@ -15,7 +15,7 @@ import {
   type ZyraAgentState,
   type ZyraTask,
 } from "@/lib/api";
-import { Button, Card, Field, FieldLabel, Select, StatusChip, Textarea } from "@/components/ui";
+import { Button, Field, FieldLabel, Modal, Select, StatusChip, Textarea } from "@/components/ui";
 import { PageHeader, StandardPageLayout } from "@/components/workflows";
 
 const columns = [
@@ -24,6 +24,8 @@ const columns = [
   { key: "in_review", label: "In Review" },
   { key: "done", label: "Done" },
 ] as const;
+
+type TaskView = "tasks" | "kanban";
 
 function normalizeStatus(status: string): string {
   if (status === "accepted") return "done";
@@ -53,6 +55,8 @@ export default function ZyraTasksPage() {
   const [selectedKnowledgeItemIds, setSelectedKnowledgeItemIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [activeView, setActiveView] = useState<TaskView>("tasks");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -114,6 +118,7 @@ export default function ZyraTasksPage() {
       setContext("");
       setSelectedJiraKeys([]);
       setSelectedKnowledgeItemIds([]);
+      setCreateOpen(false);
       setMessage("Task created in Todo. Zyra will pick it up and move it to In Progress.");
       await loadData();
     } catch (err) {
@@ -156,28 +161,128 @@ export default function ZyraTasksPage() {
     );
   }
 
+  const tasks = state.tasks || [];
+
   return (
     <StandardPageLayout
       header={
         <PageHeader
           title="Zyra"
           subtitle="Track every task on the Kanban board, then open a card to review generated testcases, feedback, sources, and activity."
-          actions={<Link href={`/projects/${projectId}/agents/zyra/settings`} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-secondary)]">Settings</Link>}
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={() => setCreateOpen(true)} disabled={!state.agent.active}>Create task</Button>
+              <Link href={`/projects/${projectId}/agents/zyra/settings`} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-secondary)]">Settings</Link>
+            </div>
+          }
         />
       }
     >
       {message && <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm">{message}</p>}
       {error && <p className="rounded-lg border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-sm text-[var(--error)]">{error}</p>}
 
-      <form onSubmit={handleCreateTask}>
-        <Card className="p-4 space-y-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold text-[var(--foreground)]">Allocate task to Zyra</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">Zyra considers story, user context, selected knowledge, selected Jira tickets, Zyra memory, and existing testcases.</p>
-            </div>
-            <StatusChip tone={state.agent.active ? "success" : "warning"}>{state.agent.active ? "Active" : "Inactive"}</StatusChip>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)]">
+        <div className="flex gap-1" role="tablist" aria-label="Zyra task views">
+          {[
+            { key: "tasks" as const, label: "Task window" },
+            { key: "kanban" as const, label: "Kanban board" },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={activeView === tab.key}
+              onClick={() => setActiveView(tab.key)}
+              className={`border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
+                activeView === tab.key
+                  ? "border-[var(--brand-primary)] text-[var(--brand-primary)]"
+                  : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <StatusChip tone={state.agent.active ? "success" : "warning"}>{state.agent.active ? "Active" : "Inactive"}</StatusChip>
+      </div>
+
+      {activeView === "tasks" ? (
+        <section className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+          <div className="grid grid-cols-[minmax(240px,1fr)_140px_180px_150px_120px] gap-3 border-b border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3 text-xs font-semibold uppercase text-[var(--muted)] max-lg:hidden">
+            <span>Task</span>
+            <span>Status</span>
+            <span>Jira</span>
+            <span>Generated</span>
+            <span>Tokens</span>
           </div>
+          <div className="divide-y divide-[var(--border)]">
+            {tasks.map((task) => (
+              <Link
+                key={task.id}
+                href={`/projects/${projectId}/agents/tasks/${task.id}`}
+                className="grid gap-3 px-4 py-4 transition-colors hover:bg-[var(--surface-secondary)] lg:grid-cols-[minmax(240px,1fr)_140px_180px_150px_120px] lg:items-center"
+              >
+                <div className="min-w-0">
+                  <h2 className="line-clamp-2 text-sm font-semibold text-[var(--foreground)]">{task.userStory}</h2>
+                  {task.context && <p className="mt-1 line-clamp-2 text-xs text-[var(--muted)]">{task.context}</p>}
+                </div>
+                <div><StatusChip tone={tone(task.taskStatus)}>{normalizeStatus(task.taskStatus).replaceAll("_", " ")}</StatusChip></div>
+                <div className="flex flex-wrap gap-1.5">
+                  {task.jiraIssueKeys.slice(0, 2).map((key) => (
+                    <span key={key} className="rounded-full bg-[var(--brand-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-primary)]">{key}</span>
+                  ))}
+                  {task.jiraIssueKeys.length === 0 && <span className="text-xs text-[var(--muted)]">No tickets</span>}
+                  {task.jiraIssueKeys.length > 2 && <span className="text-xs text-[var(--muted)]">+{task.jiraIssueKeys.length - 2}</span>}
+                </div>
+                <span className="text-sm text-[var(--foreground)]">{task.generatedCount} testcase{task.generatedCount === 1 ? "" : "s"}</span>
+                <span className="text-sm text-[var(--muted)]">{task.tokenUsage.total}</span>
+              </Link>
+            ))}
+            {tasks.length === 0 && <div className="p-8 text-center text-sm text-[var(--muted)]">No tasks in queue</div>}
+          </div>
+        </section>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-4">
+          {columns.map((column) => {
+            const columnTasks = tasksByColumn.get(column.key) || [];
+            return (
+              <section key={column.key} className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--surface-secondary)] p-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold text-[var(--foreground)]">{column.label}</h2>
+                  <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-xs text-[var(--muted)]">{columnTasks.length}</span>
+                </div>
+                <div className="space-y-3">
+                  {columnTasks.map((task) => (
+                    <Link key={task.id} href={`/projects/${projectId}/agents/tasks/${task.id}`} className="block rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 transition-colors hover:border-[var(--brand-primary)]">
+                      <StatusChip tone={tone(task.taskStatus)}>{normalizeStatus(task.taskStatus).replaceAll("_", " ")}</StatusChip>
+                      <h3 className="mt-2 line-clamp-3 text-sm font-semibold text-[var(--foreground)]">{task.userStory}</h3>
+                      {task.jiraIssueKeys.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {task.jiraIssueKeys.slice(0, 3).map((key) => (
+                            <span key={key} className="rounded-full bg-[var(--brand-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-primary)]">
+                              {key}
+                            </span>
+                          ))}
+                          {task.jiraIssueKeys.length > 3 && (
+                            <span className="rounded-full bg-[var(--surface-secondary)] px-2 py-0.5 text-[11px] font-medium text-[var(--muted)]">
+                              +{task.jiraIssueKeys.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <p className="mt-2 text-xs text-[var(--muted)]">{task.generatedCount} testcase{task.generatedCount === 1 ? "" : "s"} generated - {task.tokenUsage.total} tokens</p>
+                    </Link>
+                  ))}
+                  {columnTasks.length === 0 && <div className="rounded-lg border border-dashed border-[var(--border)] p-4 text-center text-xs text-[var(--muted)]">No tasks</div>}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+
+      <Modal open={createOpen} onClose={() => !working && setCreateOpen(false)} title="Create Zyra task" className="max-w-3xl">
+        <form onSubmit={handleCreateTask} className="space-y-4">
           <div className="grid gap-3 lg:grid-cols-2">
             <Field>
               <FieldLabel>Story</FieldLabel>
@@ -191,12 +296,7 @@ export default function ZyraTasksPage() {
           {jiraEnabled && (
             <Field>
               <FieldLabel>Jira tickets</FieldLabel>
-              <Select
-                value=""
-                onChange={(event) => {
-                  handleSelectJiraTicket(event.target.value);
-                }}
-              >
+              <Select value="" onChange={(event) => handleSelectJiraTicket(event.target.value)}>
                 <option value="">Select ticket...</option>
                 {jiraTickets.map((ticket) => (
                   <option key={ticket.id} value={ticket.jiraIssueKey}>{ticket.jiraIssueKey} - {ticket.summary}</option>
@@ -205,12 +305,7 @@ export default function ZyraTasksPage() {
               {selectedJiraKeys.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-2">
                   {selectedJiraKeys.map((key) => (
-                    <button
-                      type="button"
-                      key={key}
-                      onClick={() => setSelectedJiraKeys((prev) => prev.filter((item) => item !== key))}
-                      className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-[var(--muted)]"
-                    >
+                    <button type="button" key={key} onClick={() => setSelectedJiraKeys((prev) => prev.filter((item) => item !== key))} className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-[var(--muted)]">
                       {key} x
                     </button>
                   ))}
@@ -238,12 +333,7 @@ export default function ZyraTasksPage() {
                   {selectedKnowledgeItemIds.map((itemId) => {
                     const item = knowledgeItems.find((candidate) => candidate.id === itemId);
                     return (
-                      <button
-                        type="button"
-                        key={itemId}
-                        onClick={() => setSelectedKnowledgeItemIds((prev) => prev.filter((id) => id !== itemId))}
-                        className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-[var(--muted)]"
-                      >
+                      <button type="button" key={itemId} onClick={() => setSelectedKnowledgeItemIds((prev) => prev.filter((id) => id !== itemId))} className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-[var(--muted)]">
                         {item?.title || "Knowledge item"} x
                       </button>
                     );
@@ -252,47 +342,12 @@ export default function ZyraTasksPage() {
               )}
             </Field>
           )}
-          <Button type="submit" disabled={working || !state.agent.active || !story.trim()}>{working ? "Creating task..." : "Create task"}</Button>
-        </Card>
-      </form>
-
-      <div className="grid gap-4 xl:grid-cols-4">
-        {columns.map((column) => {
-          const tasks = tasksByColumn.get(column.key) || [];
-          return (
-            <section key={column.key} className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--surface-secondary)] p-3">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-[var(--foreground)]">{column.label}</h2>
-                <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-xs text-[var(--muted)]">{tasks.length}</span>
-              </div>
-              <div className="space-y-3">
-                {tasks.map((task) => (
-                  <Link key={task.id} href={`/projects/${projectId}/agents/tasks/${task.id}`} className="block rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 transition-colors hover:border-[var(--brand-primary)]">
-                    <StatusChip tone={tone(task.taskStatus)}>{normalizeStatus(task.taskStatus).replaceAll("_", " ")}</StatusChip>
-                    <h3 className="mt-2 line-clamp-3 text-sm font-semibold text-[var(--foreground)]">{task.userStory}</h3>
-                    {task.jiraIssueKeys.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {task.jiraIssueKeys.slice(0, 3).map((key) => (
-                          <span key={key} className="rounded-full bg-[var(--brand-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-primary)]">
-                            {key}
-                          </span>
-                        ))}
-                        {task.jiraIssueKeys.length > 3 && (
-                          <span className="rounded-full bg-[var(--surface-secondary)] px-2 py-0.5 text-[11px] font-medium text-[var(--muted)]">
-                            +{task.jiraIssueKeys.length - 3}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    <p className="mt-2 text-xs text-[var(--muted)]">{task.generatedCount} testcase{task.generatedCount === 1 ? "" : "s"} generated - {task.tokenUsage.total} tokens</p>
-                  </Link>
-                ))}
-                {tasks.length === 0 && <div className="rounded-lg border border-dashed border-[var(--border)] p-4 text-center text-xs text-[var(--muted)]">No tasks</div>}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)} disabled={working}>Cancel</Button>
+            <Button type="submit" disabled={working || !state.agent.active || !story.trim()}>{working ? "Creating..." : "Create task"}</Button>
+          </div>
+        </form>
+      </Modal>
     </StandardPageLayout>
   );
 }

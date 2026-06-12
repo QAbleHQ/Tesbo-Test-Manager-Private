@@ -659,8 +659,8 @@ export class LegacyController {
   }
 
   @Get("/api/projects/:projectId/activity")
-  activity() {
-    return { list: [], total: 0 };
+  activity(@Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.listActivity(projectId, query);
   }
 
   @Get("/api/notifications")

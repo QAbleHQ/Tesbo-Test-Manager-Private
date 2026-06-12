@@ -26,6 +26,10 @@ function parseSettings(raw: unknown): Body {
   return typeof raw === "object" && !Array.isArray(raw) ? raw as Body : {};
 }
 
+const ZYRA_AGENT_NAME = "Zyra the Test Generator";
+const LEGACY_ZYRA_AGENT_NAME = "Zyra the Edge Hunter";
+const ZYRA_AGENT_NAMES = [ZYRA_AGENT_NAME, LEGACY_ZYRA_AGENT_NAME];
+
 type ZyraGenerationInput = {
   story: string;
   context: string;
@@ -1073,6 +1077,125 @@ export class LegacyService {
     };
   }
 
+  async listActivity(projectId: string, query: Body) {
+    const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100);
+    const offset = Math.max(Number(query.offset || 0), 0);
+    const entityType = String(query.entityType || "").trim();
+    const values: any[] = [projectId];
+    const filters = ["project_id = $1"];
+    if (entityType) {
+      values.push(entityType);
+      filters.push(`entity_type = $${values.length}`);
+    }
+    const where = filters.join(" AND ");
+
+    const eventsSql = `
+      WITH activity_events AS (
+        SELECT
+          project_id,
+          ('testcase-created-' || id::text) AS id,
+          NULL::uuid AS actor_id,
+          NULL::text AS actor_email,
+          NULL::text AS actor_name,
+          'created'::text AS action,
+          'testcase'::text AS entity_type,
+          id::text AS entity_id,
+          COALESCE(external_id || ' - ' || title, title) AS entity_name,
+          NULL::text AS diff,
+          created_at
+        FROM testcases
+        WHERE project_id = $1
+
+        UNION ALL
+        SELECT
+          project_id, ('testcase-updated-' || id::text), NULL::uuid, NULL::text, NULL::text,
+          'updated'::text, 'testcase'::text, id::text, COALESCE(external_id || ' - ' || title, title), NULL::text, updated_at
+        FROM testcases
+        WHERE project_id = $1 AND updated_at > created_at + interval '1 second'
+
+        UNION ALL
+        SELECT
+          project_id, ('suite-created-' || id::text), NULL::uuid, NULL::text, NULL::text,
+          'created'::text, 'suite'::text, id::text, name, NULL::text, created_at
+        FROM suites
+        WHERE project_id = $1
+
+        UNION ALL
+        SELECT
+          project_id, ('suite-updated-' || id::text), NULL::uuid, NULL::text, NULL::text,
+          'updated'::text, 'suite'::text, id::text, name, NULL::text, updated_at
+        FROM suites
+        WHERE project_id = $1 AND updated_at > created_at + interval '1 second'
+
+        UNION ALL
+        SELECT
+          project_id, ('plan-created-' || id::text), NULL::uuid, NULL::text, NULL::text,
+          'created'::text, 'plan'::text, id::text, name, NULL::text, created_at
+        FROM plans
+        WHERE project_id = $1
+
+        UNION ALL
+        SELECT
+          project_id, ('plan-updated-' || id::text), NULL::uuid, NULL::text, NULL::text,
+          'updated'::text, 'plan'::text, id::text, name, NULL::text, updated_at
+        FROM plans
+        WHERE project_id = $1 AND updated_at > created_at + interval '1 second'
+
+        UNION ALL
+        SELECT
+          project_id, ('cycle-created-' || id::text), NULL::uuid, NULL::text, NULL::text,
+          'created'::text, 'cycle'::text, id::text, name, NULL::text, created_at
+        FROM cycles
+        WHERE project_id = $1
+
+        UNION ALL
+        SELECT
+          project_id, ('cycle-updated-' || id::text), NULL::uuid, NULL::text, NULL::text,
+          'updated'::text, 'cycle'::text, id::text, name, NULL::text, updated_at
+        FROM cycles
+        WHERE project_id = $1 AND updated_at > created_at + interval '1 second'
+
+        UNION ALL
+        SELECT
+          b.project_id, ('bug-created-' || b.id::text), b.reported_by, u.email, u.name,
+          'created'::text, 'bug'::text, b.id::text, b.title, NULL::text, b.created_at
+        FROM bugs b
+        LEFT JOIN users u ON u.id = b.reported_by
+        WHERE b.project_id = $1
+
+        UNION ALL
+        SELECT
+          b.project_id, ('bug-updated-' || b.id::text), b.reported_by, u.email, u.name,
+          'updated'::text, 'bug'::text, b.id::text, b.title, NULL::text, b.updated_at
+        FROM bugs b
+        LEFT JOIN users u ON u.id = b.reported_by
+        WHERE b.project_id = $1 AND b.updated_at > b.created_at + interval '1 second'
+
+        UNION ALL
+        SELECT
+          a.project_id, a.id::text, a.actor_id, u.email, u.name,
+          a.action::text, a.entity_type::text, a.entity_id::text, a.entity_name::text, a.diff::text, a.created_at
+        FROM audit_logs a
+        LEFT JOIN users u ON u.id = a.actor_id
+        WHERE a.project_id = $1
+      )
+      SELECT *
+      FROM activity_events
+      WHERE ${where}
+    `;
+
+    const total = await this.db.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM (${eventsSql}) counted`,
+      values
+    );
+    values.push(limit, offset);
+    const res = await this.db.query(
+      `${eventsSql} ORDER BY created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values
+    );
+    return { list: res.rows.map(toCamel), total: Number(total.rows[0]?.count || 0) };
+  }
+
   async listKnowledge(projectId: string, query: Body) {
     const values: any[] = [projectId];
     const filters = ["project_id = $1"];
@@ -1590,8 +1713,8 @@ export class LegacyService {
         [projectId]
       ),
       this.db.query<{ total: string }>(
-        "SELECT COALESCE(SUM(token_total), 0) AS total FROM ai_generation_requests WHERE project_id = $1 AND agent_name = 'Zyra the Edge Hunter'",
-        [projectId]
+        "SELECT COALESCE(SUM(token_total), 0) AS total FROM ai_generation_requests WHERE project_id = $1 AND agent_name = ANY($2::text[])",
+        [projectId, ZYRA_AGENT_NAMES]
       ),
       this.db.query(
         `SELECT id, requested_by, provider, model, user_story, acceptance_criteria, custom_prompt, style,
@@ -1599,16 +1722,16 @@ export class LegacyService {
                 agent_name, task_status, feedback, context, jira_issue_keys, token_input, token_output, token_total,
                 source_summary, activity_log
          FROM ai_generation_requests
-         WHERE project_id = $1 AND agent_name = 'Zyra the Edge Hunter'
+         WHERE project_id = $1 AND agent_name = ANY($2::text[])
          ORDER BY updated_at DESC LIMIT 50`,
-        [projectId]
+        [projectId, ZYRA_AGENT_NAMES]
       )
     ]);
     const settings = this.parseProjectSettings(project.settings).zyraAgent || {};
     const key = allocation.rows[0];
     return {
       agent: {
-        name: "Zyra the Edge Hunter",
+        name: ZYRA_AGENT_NAME,
         role: "AI testcase generation agent",
         active: Boolean(key),
         activationReason: key ? "Workspace AI key allocated to this project." : "Add and allocate an OpenAI or Claude key to activate Zyra."
@@ -1642,8 +1765,8 @@ export class LegacyService {
               agent_name, task_status, feedback, context, jira_issue_keys, token_input, token_output, token_total,
               source_summary, activity_log
        FROM ai_generation_requests
-       WHERE id = $1 AND project_id = $2 AND agent_name = 'Zyra the Edge Hunter'`,
-      [taskId, projectId]
+       WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[])`,
+      [taskId, projectId, ZYRA_AGENT_NAMES]
     );
     if (!res.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
     return this.formatAiTask(res.rows[0]);
@@ -1695,7 +1818,7 @@ export class LegacyService {
        (project_id, requested_by, provider, model, user_story, acceptance_criteria, custom_prompt, requested_count,
         generated_count, generated_payload, agent_name, task_status, feedback, context, jira_issue_keys,
         token_input, token_output, token_total, source_summary, activity_log)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,'[]'::jsonb,'Zyra the Edge Hunter','todo',$9,$10,$11::jsonb,0,0,0,$12::jsonb,$13::jsonb)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,'[]'::jsonb,$9,'todo',$10,$11,$12::jsonb,0,0,0,$13::jsonb,$14::jsonb)
        RETURNING *`,
       [
         projectId,
@@ -1706,6 +1829,7 @@ export class LegacyService {
         acceptanceCriteria,
         context,
         requestedCount,
+        ZYRA_AGENT_NAME,
         feedback,
         context,
         JSON.stringify(jiraIssueKeys),
@@ -2246,7 +2370,7 @@ export class LegacyService {
 
   private zyraSystemPrompt(): string {
     return [
-      "You are Zyra the Edge Hunter, an AI testcase generation agent.",
+      "You are Zyra the Test Generator, an AI testcase generation agent.",
       "Generate practical, detailed QA testcases from the supplied product story, user context, Jira tickets, knowledge-base sources, Zyra memory, and existing testcase repository context.",
       "Review existing testcases before generating. Do not duplicate existing coverage; instead fill gaps, deepen weak coverage, or create clearly distinct edge cases.",
       "Prioritize edge cases, boundary values, negative paths, permissions, data integrity, state transitions, and traceability.",
