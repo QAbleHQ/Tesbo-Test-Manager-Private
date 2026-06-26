@@ -115,27 +115,44 @@ export class LegacyController {
     return this.legacy.allocateAiKey(req.userId, body);
   }
 
+  @Post("/api/workspace/members/role")
+  changeWorkspaceMemberRole(@Req() req: AuthenticatedRequest, @Body() body: Record<string, any>) {
+    return this.legacy.changeWorkspaceMemberRole(req.userId, body.userId, body.role);
+  }
+
   @Get("/api/workspace/invitations")
-  invitations() {
-    return [];
+  listInvitations(@Req() req: AuthenticatedRequest) {
+    return this.legacy.listInvitations(req.userId);
   }
 
   @Post("/api/workspace/invitations")
-  createInvitation(@Body() body: Record<string, any>) {
-    return { id: "local-invite", email: body.email, role: body.role || "member", expiresAt: null, createdAt: new Date().toISOString() };
+  createInvitation(@Req() req: AuthenticatedRequest, @Body() body: Record<string, any>) {
+    return this.legacy.createInvitation(req.userId, body);
   }
 
   @Delete("/api/workspace/invitations/:id")
-  revokeInvitation() {}
+  cancelInvitation(@Req() req: AuthenticatedRequest, @Param("id") id: string) {
+    return this.legacy.cancelInvitation(req.userId, id);
+  }
+
+  @Post("/api/workspace/invitations/:id/resend")
+  resendInvitation(@Req() req: AuthenticatedRequest, @Param("id") id: string) {
+    return this.legacy.resendInvitation(req.userId, id);
+  }
 
   @Get("/api/invitations/:token")
   getInvitation(@Param("token") token: string) {
-    return { id: token, status: "expired" };
+    return this.legacy.getInvitationByToken(token);
   }
 
   @Post("/api/invitations/:token/accept")
-  acceptInvitation() {
-    return { accepted: false, organizationId: null, projectId: null };
+  acceptInvitation(@Req() req: AuthenticatedRequest, @Param("token") token: string) {
+    return this.legacy.acceptInvitation(req.userId, token);
+  }
+
+  @Post("/api/invitations/:token/register")
+  registerFromInvitation(@Param("token") token: string, @Body() body: Record<string, any>) {
+    return this.legacy.registerFromInvitation(token, body);
   }
 
   @Get("/api/projects")

@@ -9,7 +9,17 @@ import {
   getInvitationByToken,
   type InviteDetails,
 } from "@/lib/api";
-import { Button, Card, CardBody, CardHeader, CardTitle, StatusChip } from "@/components/ui";
+import { Button, Card, CardBody, CardHeader, CardTitle } from "@/components/ui";
+import { BrandLogo } from "@/components/BrandLogo";
+
+function roleLabel(role: string): string {
+  const n = (role ?? "").trim().toLowerCase();
+  if (n === "manager" || n === "admin") return "Manager";
+  if (n === "owner") return "Owner";
+  return "QA Engineer";
+}
+
+type PageState = "loading" | "valid" | "expired" | "cancelled" | "accepted" | "invalid";
 
 export default function InviteAcceptancePage() {
   const params = useParams();
@@ -17,127 +27,226 @@ export default function InviteAcceptancePage() {
   const token = params.token as string;
 
   const [invite, setInvite] = useState<InviteDetails | null>(null);
-  const [auth, setAuth] = useState<{ userId: string } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loggedInUserId, setLoggedInUserId] = useState<string | null>(null);
+  const [loggedInEmail, setLoggedInEmail] = useState<string | null>(null);
+  const [state, setState] = useState<PageState>("loading");
   const [accepting, setAccepting] = useState(false);
-  const [error, setError] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    Promise.all([getInvitationByToken(token), authMe()])
-      .then(([inv, me]) => {
+    async function load() {
+      try {
+        const [inv, me] = await Promise.all([
+          getInvitationByToken(token),
+          authMe().catch(() => null),
+        ]);
         if (!active) return;
         setInvite(inv);
-        setAuth(me);
-      })
-      .catch((err) => {
-        if (!active) return;
-        setError(err instanceof Error ? err.message : "Failed to load invitation");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
+        if (me) {
+          setLoggedInUserId(me.userId);
+          setLoggedInEmail(me.email ?? null);
+        }
+        if (inv.status === "expired") setState("expired");
+        else if (inv.status === "cancelled") setState("cancelled");
+        else if (inv.status === "accepted") setState("accepted");
+        else setState("valid");
+      } catch {
+        if (active) setState("invalid");
+      }
+    }
+    load();
+    return () => { active = false; };
   }, [token]);
 
-  async function onAccept() {
-    setError("");
+  async function handleAccept() {
+    setErrorMsg("");
     setAccepting(true);
     try {
       await acceptInvitation(token);
       router.push("/projects");
       router.refresh();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to accept invitation";
-      setError(message);
-      if (message.toLowerCase().includes("not authenticated")) {
-        router.push(`/login?redirect=${encodeURIComponent(`/invite/${token}`)}`);
-      }
+      const msg = err instanceof Error ? err.message : "Failed to accept invitation";
+      setErrorMsg(msg);
     } finally {
       setAccepting(false);
     }
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-[var(--muted)]">Loading invitation…</p>
-      </div>
-    );
-  }
-
-  if (error && !invite) {
-    return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <Card className="w-full max-w-md p-6">
-          <CardHeader>
-            <CardTitle>Invitation unavailable</CardTitle>
-          </CardHeader>
-          <CardBody>
-            <p className="text-sm text-[var(--error)]">{error}</p>
-          </CardBody>
-        </Card>
-      </div>
-    );
-  }
-
-  const isPending = invite?.status === "pending";
   const invitePath = `/invite/${token}`;
-  const loginUrl = `/login?redirect=${encodeURIComponent(invitePath)}&inviteEmail=${encodeURIComponent(
-    invite?.email ?? ""
-  )}`;
+  const loginUrl = `/login?redirect=${encodeURIComponent(invitePath)}&inviteEmail=${encodeURIComponent(invite?.email ?? "")}`;
+  const registerUrl = `/invite/${token}/register`;
+
+  // Email mismatch: logged in as a different email
+  const emailMismatch =
+    loggedInEmail && invite?.email && loggedInEmail.toLowerCase() !== invite.email.toLowerCase();
+
+  if (state === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <p className="text-sm text-[var(--ink-400)]">Loading invitation…</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <Card className="w-full max-w-md p-6">
-        <CardHeader>
-          <CardTitle>Workspace invitation</CardTitle>
-        </CardHeader>
-        <CardBody className="space-y-1">
-          <p className="text-sm text-[var(--muted)]">
-            {invite?.email} is invited to join{" "}
-            <span className="font-medium text-[var(--foreground)]">{invite?.organizationName ?? "this workspace"}</span>.
-          </p>
-          <p className="flex items-center gap-2 text-sm capitalize">
-            <span className="text-[var(--muted)]">Role:</span> {invite?.role}
-            <span className="text-[var(--muted)]">·</span>
-            <span className="text-[var(--muted)]">Status:</span>
-            <StatusChip tone={isPending ? "brand" : "neutral"}>{invite?.status}</StatusChip>
-          </p>
+    <div className="flex min-h-screen flex-col items-center justify-center bg-[var(--ink-50)] px-4 py-12">
+      <div className="mb-8">
+        <BrandLogo className="h-10 w-auto" />
+      </div>
 
-          {error && <p className="mt-3 text-sm text-[var(--error)]">{error}</p>}
-
-          {!isPending && (
-            <p className="mt-4 text-sm text-[var(--muted)]">
-              This invitation can no longer be accepted.
-            </p>
-          )}
-
-          {isPending && !auth && (
-            <div className="mt-5">
-              <p className="text-sm text-[var(--muted)]">
-                Sign in with the invited email address to accept.
+      <Card className="w-full max-w-md p-8">
+        {/* ── Invalid ── */}
+        {state === "invalid" && (
+          <>
+            <CardHeader>
+              <CardTitle>Invalid invitation</CardTitle>
+            </CardHeader>
+            <CardBody>
+              <p className="text-sm text-[var(--ink-400)]">
+                This invite link is invalid or has already been used. Contact the person who invited you.
               </p>
-              <Link href={loginUrl} className="mt-3 inline-block">
-                <Button>Continue to sign in</Button>
-              </Link>
-            </div>
-          )}
+            </CardBody>
+          </>
+        )}
 
-          {isPending && auth && (
-            <Button
-              type="button"
-              onClick={onAccept}
-              disabled={accepting}
-              className="mt-5"
-            >
-              {accepting ? "Joining…" : "Accept and join workspace"}
-            </Button>
-          )}
-        </CardBody>
+        {/* ── Expired ── */}
+        {state === "expired" && (
+          <>
+            <CardHeader>
+              <CardTitle>Invitation expired</CardTitle>
+            </CardHeader>
+            <CardBody>
+              <p className="text-sm text-[var(--ink-400)]">
+                This invitation has expired. Ask the sender to resend it from the Team management page.
+              </p>
+            </CardBody>
+          </>
+        )}
+
+        {/* ── Cancelled ── */}
+        {state === "cancelled" && (
+          <>
+            <CardHeader>
+              <CardTitle>Invitation cancelled</CardTitle>
+            </CardHeader>
+            <CardBody>
+              <p className="text-sm text-[var(--ink-400)]">
+                This invitation has been cancelled. Contact your team owner if you believe this is a mistake.
+              </p>
+            </CardBody>
+          </>
+        )}
+
+        {/* ── Already accepted ── */}
+        {state === "accepted" && (
+          <>
+            <CardHeader>
+              <CardTitle>Invitation already accepted</CardTitle>
+            </CardHeader>
+            <CardBody className="space-y-4">
+              <p className="text-sm text-[var(--ink-400)]">
+                This invitation has already been accepted. Sign in to access the workspace.
+              </p>
+              <Link href="/login">
+                <Button className="w-full">Sign in</Button>
+              </Link>
+            </CardBody>
+          </>
+        )}
+
+        {/* ── Valid ── */}
+        {state === "valid" && invite && (
+          <>
+            <CardHeader>
+              <CardTitle>You&apos;re invited</CardTitle>
+            </CardHeader>
+            <CardBody className="space-y-5">
+              <div className="rounded-[var(--radius-control)] bg-[var(--ink-100)] px-4 py-3 text-sm">
+                <p className="text-[var(--ink-400)]">
+                  You have been invited to join{" "}
+                  <strong className="text-[var(--foreground)]">
+                    {invite.organizationName ?? "this workspace"}
+                  </strong>{" "}
+                  as{" "}
+                  <strong className="text-[var(--foreground)]">{roleLabel(invite.role)}</strong>.
+                </p>
+                {invite.projects.length > 0 && (
+                  <p className="mt-1 text-[var(--ink-400)]">
+                    Project access:{" "}
+                    <strong className="text-[var(--foreground)]">
+                      {invite.projects.map((p) => p.name).join(", ")}
+                    </strong>
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-[var(--ink-400)]">
+                  Invite sent to {invite.email} · expires{" "}
+                  {new Date(invite.expiresAt).toLocaleDateString()}
+                </p>
+              </div>
+
+              {errorMsg && (
+                <p className="text-sm text-[var(--error)]">{errorMsg}</p>
+              )}
+
+              {/* ── Not logged in ── */}
+              {!loggedInUserId && (
+                <div className="space-y-3">
+                  {invite.hasAccount ? (
+                    <>
+                      <p className="text-sm text-[var(--ink-400)]">
+                        Sign in with <strong>{invite.email}</strong> to accept this invitation.
+                      </p>
+                      <Link href={loginUrl}>
+                        <Button className="w-full">Sign in to accept</Button>
+                      </Link>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm text-[var(--ink-400)]">
+                        Create your account to join the workspace.
+                      </p>
+                      <Link href={registerUrl}>
+                        <Button className="w-full">Create account</Button>
+                      </Link>
+                      <p className="text-center text-xs text-[var(--ink-400)]">
+                        Already have an account?{" "}
+                        <Link href={loginUrl} className="text-[var(--denim)] hover:underline">
+                          Sign in
+                        </Link>
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ── Logged in, email mismatch ── */}
+              {loggedInUserId && emailMismatch && (
+                <div className="space-y-3">
+                  <p className="text-sm text-[var(--error)]">
+                    You are signed in as a different email. This invitation is for{" "}
+                    <strong>{invite.email}</strong>. Sign out and sign in with the correct account.
+                  </p>
+                  <Link href={loginUrl}>
+                    <Button variant="secondary" className="w-full">Sign in with {invite.email}</Button>
+                  </Link>
+                </div>
+              )}
+
+              {/* ── Logged in, correct email ── */}
+              {loggedInUserId && !emailMismatch && (
+                <Button
+                  className="w-full"
+                  onClick={handleAccept}
+                  disabled={accepting}
+                >
+                  {accepting ? "Joining…" : "Accept and join workspace"}
+                </Button>
+              )}
+            </CardBody>
+          </>
+        )}
       </Card>
     </div>
   );

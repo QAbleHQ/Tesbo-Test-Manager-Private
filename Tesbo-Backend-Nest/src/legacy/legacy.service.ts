@@ -1,6 +1,9 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import type { QueryResultRow } from "pg";
+import { EmailService } from "../auth/email.service";
+import { PasswordService } from "../auth/password.service";
+import { AppConfigService } from "../config/app-config.service";
 import { DatabaseService } from "../database/database.service";
 
 type Body = Record<string, any>;
@@ -203,7 +206,12 @@ function normalizeAnthropicMessagesUrl(baseUrl?: string | null): string {
 
 @Injectable()
 export class LegacyService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly email: EmailService,
+    private readonly password: PasswordService,
+    private readonly config: AppConfigService
+  ) {}
 
   private requireUser(userId?: string | null): string {
     if (!userId) throw new BadRequestException({ error: "Authentication required" });
@@ -395,8 +403,387 @@ export class LegacyService {
   }
 
   async removeWorkspaceMember(userId: string | null | undefined, targetUserId: string) {
-    const workspace = await this.workspace(userId);
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
+    if (uid === targetUserId) throw new BadRequestException({ error: "You cannot remove yourself" });
+    // Protect the last owner
+    const targetMember = await this.db.query<{ role: string }>(
+      "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2",
+      [workspace.id, targetUserId]
+    );
+    if (!targetMember.rows[0]) throw new NotFoundException({ error: "Member not found" });
+    if (targetMember.rows[0].role === "owner") {
+      const ownerCount = await this.db.query<{ count: string }>(
+        "SELECT COUNT(*) AS count FROM organization_members WHERE organization_id = $1 AND role = 'owner'",
+        [workspace.id]
+      );
+      if (Number(ownerCount.rows[0].count) <= 1)
+        throw new BadRequestException({ error: "Cannot remove the last owner" });
+    }
+    // Only owner can remove members; manager cannot remove members (per spec)
+    const callerRole = this.normalizeRole(workspace.role);
+    if (callerRole !== "owner") throw new ForbiddenException({ error: "Only the owner can remove team members" });
     await this.db.query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2", [workspace.id, targetUserId]);
+  }
+
+  // ─── Role helpers ────────────────────────────────────────────────────────────
+
+  private hashToken(raw: string): string {
+    return createHash("sha256").update(raw).digest("hex");
+  }
+
+  normalizeRole(role: string): "owner" | "manager" | "qa_engineer" {
+    const n = (role ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/ /g, "_");
+    if (n === "owner") return "owner";
+    if (n === "manager" || n === "admin" || n === "test_manager") return "manager";
+    return "qa_engineer";
+  }
+
+  // ─── Invitations ─────────────────────────────────────────────────────────────
+
+  async createInvitation(userId: string | null | undefined, body: Body) {
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
+    const callerRole = this.normalizeRole(workspace.role);
+
+    const email = String(body.email || "").trim().toLowerCase();
+    const roleRaw = String(body.role || "qa_engineer");
+    const role = this.normalizeRole(roleRaw);
+    const projectIds: string[] = Array.isArray(body.projectIds) ? body.projectIds.filter(Boolean) : [];
+
+    if (!email) throw new BadRequestException({ error: "email is required" });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      throw new BadRequestException({ error: "invalid email address" });
+
+    // Permission checks
+    if (callerRole === "qa_engineer") throw new ForbiddenException({ error: "QA Engineers cannot invite members" });
+    if (role === "owner") throw new ForbiddenException({ error: "Cannot invite owners directly" });
+    if (callerRole === "manager" && role !== "qa_engineer")
+      throw new ForbiddenException({ error: "Managers can only invite QA Engineers" });
+
+    // Already a member?
+    const existing = await this.db.query(
+      `SELECT om.user_id FROM organization_members om
+       JOIN users u ON u.id = om.user_id
+       WHERE om.organization_id = $1 AND lower(u.email) = $2`,
+      [workspace.id, email]
+    );
+    if (existing.rows[0]) throw new BadRequestException({ error: "This user is already a team member" });
+
+    // Pending invite already exists?
+    const pending = await this.db.query<{ id: string }>(
+      "SELECT id FROM invitations WHERE organization_id = $1 AND email = $2 AND status = 'pending'",
+      [workspace.id, email]
+    );
+    if (pending.rows[0])
+      throw new BadRequestException({
+        error: "This email already has a pending invite. You can resend the invite.",
+        inviteId: pending.rows[0].id
+      });
+
+    // Validate project IDs belong to this workspace
+    if (projectIds.length > 0) {
+      const valid = await this.db.query<{ id: string }>(
+        "SELECT id FROM projects WHERE id = ANY($1::uuid[]) AND organization_id = $2 AND archived_at IS NULL",
+        [projectIds, workspace.id]
+      );
+      if (valid.rows.length !== projectIds.length)
+        throw new BadRequestException({ error: "One or more project IDs are invalid" });
+    }
+
+    const rawToken = randomBytes(32).toString("hex");
+    const tokenHash = this.hashToken(rawToken);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    const result = await this.db.query(
+      `INSERT INTO invitations (organization_id, email, role, token, invited_by, status, expires_at, project_ids)
+       VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)
+       RETURNING id, email, role, status, expires_at, created_at, project_ids`,
+      [workspace.id, email, role, tokenHash, uid, expiresAt, projectIds]
+    );
+
+    const inviter = await this.db.query<{ name: string | null; email: string }>(
+      "SELECT name, email FROM users WHERE id = $1",
+      [uid]
+    );
+    const inviterName = inviter.rows[0]?.name || inviter.rows[0]?.email || "A team member";
+
+    let projectNames: string[] = [];
+    if (projectIds.length > 0) {
+      const projs = await this.db.query<{ name: string }>(
+        "SELECT name FROM projects WHERE id = ANY($1::uuid[])",
+        [projectIds]
+      );
+      projectNames = projs.rows.map((r) => r.name);
+    }
+
+    await this.email.sendInvite(email, inviterName, role, workspace.name, rawToken, projectNames, this.config.frontendUrl);
+
+    return toCamel(result.rows[0]);
+  }
+
+  async listInvitations(userId: string | null | undefined) {
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
+    // Auto-expire overdue pending invites before returning
+    await this.db.query(
+      "UPDATE invitations SET status = 'expired', updated_at = now() WHERE organization_id = $1 AND status = 'pending' AND expires_at < now()",
+      [workspace.id]
+    );
+    const res = await this.db.query(
+      `SELECT i.id, i.email, i.role, i.status, i.expires_at, i.created_at, i.project_ids,
+              u.name AS invited_by_name, u.email AS invited_by_email,
+              COALESCE(
+                (SELECT json_agg(json_build_object('id', p.id, 'name', p.name))
+                 FROM projects p WHERE p.id = ANY(i.project_ids::uuid[])),
+                '[]'::json
+              ) AS projects
+       FROM invitations i
+       LEFT JOIN users u ON u.id = i.invited_by
+       WHERE i.organization_id = $1 AND i.status IN ('pending', 'expired')
+       ORDER BY i.created_at DESC`,
+      [workspace.id]
+    );
+    return res.rows.map((row) => ({
+      ...toCamel(row),
+      invitedByName: row.invited_by_name,
+      invitedByEmail: row.invited_by_email,
+      projects: row.projects ?? []
+    }));
+  }
+
+  async cancelInvitation(userId: string | null | undefined, inviteId: string) {
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
+    const callerRole = this.normalizeRole(workspace.role);
+    const invite = await this.db.query<{ id: string; status: string; invited_by: string | null }>(
+      "SELECT id, status, invited_by FROM invitations WHERE id = $1 AND organization_id = $2",
+      [inviteId, workspace.id]
+    );
+    if (!invite.rows[0]) throw new NotFoundException({ error: "Invitation not found" });
+    if (invite.rows[0].status !== "pending") throw new BadRequestException({ error: "Only pending invitations can be cancelled" });
+    if (callerRole !== "owner" && invite.rows[0].invited_by !== uid)
+      throw new ForbiddenException({ error: "You can only cancel invitations you sent" });
+    await this.db.query(
+      "UPDATE invitations SET status = 'cancelled', cancelled_at = now(), updated_at = now() WHERE id = $1",
+      [inviteId]
+    );
+  }
+
+  async resendInvitation(userId: string | null | undefined, inviteId: string) {
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
+    const callerRole = this.normalizeRole(workspace.role);
+    const invite = await this.db.query<{ id: string; email: string; role: string; status: string; invited_by: string | null; project_ids: string[] }>(
+      "SELECT id, email, role, status, invited_by, project_ids FROM invitations WHERE id = $1 AND organization_id = $2",
+      [inviteId, workspace.id]
+    );
+    if (!invite.rows[0]) throw new NotFoundException({ error: "Invitation not found" });
+    if (invite.rows[0].status !== "pending") throw new BadRequestException({ error: "Only pending invitations can be resent" });
+    if (callerRole !== "owner" && invite.rows[0].invited_by !== uid)
+      throw new ForbiddenException({ error: "You can only resend invitations you sent" });
+
+    const rawToken = randomBytes(32).toString("hex");
+    const tokenHash = this.hashToken(rawToken);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    await this.db.query(
+      "UPDATE invitations SET token = $1, expires_at = $2, updated_at = now() WHERE id = $3",
+      [tokenHash, expiresAt, inviteId]
+    );
+
+    const inviter = await this.db.query<{ name: string | null; email: string }>(
+      "SELECT name, email FROM users WHERE id = $1",
+      [uid]
+    );
+    const inviterName = inviter.rows[0]?.name || inviter.rows[0]?.email || "A team member";
+
+    const projectIds: string[] = invite.rows[0]["project_ids"] ?? [];
+    let projectNames: string[] = [];
+    if (projectIds.length > 0) {
+      const projs = await this.db.query<{ name: string }>(
+        "SELECT name FROM projects WHERE id = ANY($1::uuid[])",
+        [projectIds]
+      );
+      projectNames = projs.rows.map((r) => r.name);
+    }
+
+    await this.email.sendInvite(
+      invite.rows[0].email,
+      inviterName,
+      invite.rows[0].role,
+      workspace.name,
+      rawToken,
+      projectNames,
+      this.config.frontendUrl
+    );
+    return { resent: true };
+  }
+
+  async getInvitationByToken(rawToken: string) {
+    const tokenHash = this.hashToken(rawToken);
+    const res = await this.db.query(
+      `SELECT i.id, i.organization_id, i.email, i.role, i.status, i.expires_at, i.accepted_at, i.created_at, i.project_ids,
+              o.name AS organization_name,
+              COALESCE(
+                (SELECT json_agg(json_build_object('id', p.id, 'name', p.name))
+                 FROM projects p WHERE p.id = ANY(i.project_ids::uuid[])),
+                '[]'::json
+              ) AS projects
+       FROM invitations i
+       LEFT JOIN organizations o ON o.id = i.organization_id
+       WHERE i.token = $1`,
+      [tokenHash]
+    );
+    if (!res.rows[0]) throw new NotFoundException({ error: "Invitation not found or token is invalid" });
+    const row = res.rows[0];
+
+    // Auto-expire if past expiry
+    if (row.status === "pending" && new Date(row.expires_at) < new Date()) {
+      await this.db.query("UPDATE invitations SET status = 'expired', updated_at = now() WHERE id = $1", [row.id]);
+      row.status = "expired";
+    }
+
+    // Check if email already has an account (so frontend knows which flow to show)
+    const hasAccount = await this.db.query<{ id: string }>(
+      "SELECT id FROM users WHERE email = $1 AND password_hash IS NOT NULL",
+      [row.email]
+    );
+
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      organizationName: row.organization_name,
+      email: row.email,
+      role: row.role,
+      status: row.status,
+      expiresAt: row.expires_at,
+      acceptedAt: row.accepted_at,
+      createdAt: row.created_at,
+      projects: row.projects ?? [],
+      hasAccount: !!hasAccount.rows[0]
+    };
+  }
+
+  async acceptInvitation(userId: string | null | undefined, rawToken: string) {
+    const uid = this.requireUser(userId);
+    const tokenHash = this.hashToken(rawToken);
+    const invite = await this.db.query<{ id: string; organization_id: string; email: string; role: string; status: string; expires_at: string; project_ids: string[] }>(
+      "SELECT id, organization_id, email, role, status, expires_at, project_ids FROM invitations WHERE token = $1",
+      [tokenHash]
+    );
+    if (!invite.rows[0]) throw new NotFoundException({ error: "Invitation not found or token is invalid" });
+    const inv = invite.rows[0];
+
+    if (inv.status === "cancelled") throw new BadRequestException({ error: "This invitation has been cancelled" });
+    if (inv.status === "accepted") throw new BadRequestException({ error: "This invitation has already been accepted" });
+    if (inv.status === "expired" || new Date(inv.expires_at) < new Date())
+      throw new BadRequestException({ error: "This invitation has expired. Ask the sender to resend it." });
+
+    // Verify the logged-in user's email matches the invited email
+    const user = await this.db.query<{ email: string }>("SELECT email FROM users WHERE id = $1", [uid]);
+    if (!user.rows[0]) throw new NotFoundException({ error: "User not found" });
+    if (user.rows[0].email.toLowerCase() !== inv.email.toLowerCase())
+      throw new ForbiddenException({ error: "You must sign in with the invited email address to accept this invite" });
+
+    await this.db.transaction(async (client) => {
+      await client.query(
+        "INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (organization_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+        [inv.organization_id, uid, inv.role]
+      );
+      if (inv.project_ids?.length > 0) {
+        for (const projectId of inv.project_ids) {
+          await client.query(
+            "INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+            [projectId, uid, inv.role]
+          );
+        }
+      }
+      await client.query(
+        "UPDATE invitations SET status = 'accepted', accepted_at = now(), updated_at = now() WHERE id = $1",
+        [inv.id]
+      );
+    });
+
+    return { accepted: true, organizationId: inv.organization_id };
+  }
+
+  async registerFromInvitation(rawToken: string, body: Body) {
+    const tokenHash = this.hashToken(rawToken);
+    const invite = await this.db.query<{ id: string; organization_id: string; email: string; role: string; status: string; expires_at: string; project_ids: string[] }>(
+      "SELECT id, organization_id, email, role, status, expires_at, project_ids FROM invitations WHERE token = $1",
+      [tokenHash]
+    );
+    if (!invite.rows[0]) throw new NotFoundException({ error: "Invitation not found or token is invalid" });
+    const inv = invite.rows[0];
+
+    if (inv.status !== "pending") throw new BadRequestException({ error: `Invitation is ${inv.status} and can no longer be used` });
+    if (new Date(inv.expires_at) < new Date()) {
+      await this.db.query("UPDATE invitations SET status = 'expired', updated_at = now() WHERE id = $1", [inv.id]);
+      throw new BadRequestException({ error: "This invitation has expired. Ask the sender to resend it." });
+    }
+
+    const name = String(body.name || "").trim();
+    const pw = String(body.password || "").trim();
+    if (!name) throw new BadRequestException({ error: "name is required" });
+    if (!pw || pw.length < 8) throw new BadRequestException({ error: "password must be at least 8 characters" });
+
+    // Ensure the email is not already taken
+    const existingUser = await this.db.query<{ id: string }>("SELECT id FROM users WHERE email = $1", [inv.email]);
+    if (existingUser.rows[0]) throw new BadRequestException({ error: "An account with this email already exists. Please sign in and accept the invite." });
+
+    const passwordHash = this.password.hashPassword(pw);
+
+    const newUser = await this.db.transaction(async (client) => {
+      const uRes = await client.query<{ id: string }>(
+        "INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        [inv.email, name, passwordHash]
+      );
+      const uid = uRes.rows[0].id;
+      await client.query(
+        "INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)",
+        [inv.organization_id, uid, inv.role]
+      );
+      if (inv.project_ids?.length > 0) {
+        for (const projectId of inv.project_ids) {
+          await client.query(
+            "INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            [projectId, uid, inv.role]
+          );
+        }
+      }
+      await client.query(
+        "UPDATE invitations SET status = 'accepted', accepted_at = now(), updated_at = now() WHERE id = $1",
+        [inv.id]
+      );
+      return uid;
+    });
+
+    return { userId: newUser, organizationId: inv.organization_id };
+  }
+
+  async changeWorkspaceMemberRole(userId: string | null | undefined, targetUserId: string, newRole: string) {
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
+    const callerRole = this.normalizeRole(workspace.role);
+    if (callerRole !== "owner") throw new ForbiddenException({ error: "Only the owner can change roles" });
+    if (uid === targetUserId) throw new BadRequestException({ error: "You cannot change your own role" });
+
+    const target = await this.db.query<{ role: string }>(
+      "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2",
+      [workspace.id, targetUserId]
+    );
+    if (!target.rows[0]) throw new NotFoundException({ error: "Member not found" });
+    const targetRole = this.normalizeRole(target.rows[0].role);
+    if (targetRole === "owner") throw new ForbiddenException({ error: "Owner role cannot be changed" });
+
+    const normalized = this.normalizeRole(newRole);
+    if (normalized === "owner") throw new ForbiddenException({ error: "Cannot promote to owner" });
+
+    await this.db.query(
+      "UPDATE organization_members SET role = $1 WHERE organization_id = $2 AND user_id = $3",
+      [normalized, workspace.id, targetUserId]
+    );
   }
 
   async aiKeys(userId: string | null | undefined) {

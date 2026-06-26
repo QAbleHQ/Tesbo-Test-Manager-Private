@@ -54,10 +54,12 @@ export async function api<T = unknown>(
 
 export async function authMe(): Promise<{
   userId: string;
+  email: string | null;
+  name: string | null;
   isPlatformAdmin?: boolean;
 } | null> {
   try {
-    return await api<{ userId: string; isPlatformAdmin?: boolean }>(
+    return await api<{ userId: string; email: string | null; name: string | null; isPlatformAdmin?: boolean }>(
       "/api/auth/me"
     );
   } catch {
@@ -205,6 +207,8 @@ export interface WorkspaceMember {
   joinedAt: string;
 }
 
+export type WorkspaceRole = "owner" | "manager" | "qa_engineer";
+
 export async function getWorkspace(): Promise<WorkspaceInfo> {
   return api<WorkspaceInfo>("/api/workspace");
 }
@@ -280,47 +284,83 @@ export async function removeWorkspaceMember(userId: string): Promise<void> {
   await api(`/api/workspace/members/${userId}`, { method: "DELETE" });
 }
 
+export async function changeWorkspaceMemberRole(userId: string, role: string): Promise<void> {
+  await api("/api/workspace/members/role", { method: "POST", body: { userId, role } });
+}
+
+export interface InviteProject {
+  id: string;
+  name: string;
+}
+
 export interface WorkspaceInvitation {
   id: string;
   email: string;
   role: string;
+  status: "pending" | "accepted" | "expired" | "cancelled";
   expiresAt: string;
   createdAt: string;
+  invitedByName: string | null;
+  invitedByEmail: string | null;
+  projects: InviteProject[];
 }
 
 export async function listWorkspaceInvitations(): Promise<WorkspaceInvitation[]> {
   return api<WorkspaceInvitation[]>("/api/workspace/invitations");
 }
 
-export async function createWorkspaceInvitation(data: { email: string; role?: string }): Promise<WorkspaceInvitation> {
+export async function createWorkspaceInvitation(data: {
+  email: string;
+  role?: string;
+  projectIds?: string[];
+}): Promise<WorkspaceInvitation> {
   return api<WorkspaceInvitation>("/api/workspace/invitations", { method: "POST", body: data });
 }
 
-export async function revokeWorkspaceInvitation(invitationId: string): Promise<void> {
+export async function cancelWorkspaceInvitation(invitationId: string): Promise<void> {
   await api(`/api/workspace/invitations/${invitationId}`, { method: "DELETE" });
+}
+
+export async function resendWorkspaceInvitation(invitationId: string): Promise<void> {
+  await api(`/api/workspace/invitations/${invitationId}/resend`, { method: "POST" });
+}
+
+/** @deprecated use cancelWorkspaceInvitation */
+export async function revokeWorkspaceInvitation(invitationId: string): Promise<void> {
+  return cancelWorkspaceInvitation(invitationId);
 }
 
 export interface InviteDetails {
   id: string;
   organizationId: string | null;
-  projectId: string | null;
   organizationName: string | null;
-  projectName: string | null;
   email: string;
   role: string;
+  status: "pending" | "accepted" | "expired" | "cancelled";
   expiresAt: string;
   acceptedAt: string | null;
   createdAt: string;
-  status: "pending" | "accepted" | "expired";
+  projects: InviteProject[];
+  hasAccount: boolean;
 }
 
 export async function getInvitationByToken(token: string): Promise<InviteDetails> {
   return api<InviteDetails>(`/api/invitations/${token}`);
 }
 
-export async function acceptInvitation(token: string): Promise<{ accepted: boolean; organizationId: string | null; projectId: string | null }> {
-  return api<{ accepted: boolean; organizationId: string | null; projectId: string | null }>(`/api/invitations/${token}/accept`, {
+export async function acceptInvitation(token: string): Promise<{ accepted: boolean; organizationId: string | null }> {
+  return api<{ accepted: boolean; organizationId: string | null }>(`/api/invitations/${token}/accept`, {
     method: "POST",
+  });
+}
+
+export async function registerFromInvitation(
+  token: string,
+  data: { name: string; password: string }
+): Promise<{ userId: string; organizationId: string }> {
+  return api<{ userId: string; organizationId: string }>(`/api/invitations/${token}/register`, {
+    method: "POST",
+    body: data,
   });
 }
 

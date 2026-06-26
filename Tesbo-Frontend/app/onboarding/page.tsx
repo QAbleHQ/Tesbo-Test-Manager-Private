@@ -73,7 +73,7 @@ export default function OnboardingPage() {
       );
 
       for (const email of emails) {
-        await addWorkspaceMember({ email, role: "member" });
+        await addWorkspaceMember({ email, role: "qa_engineer" });
       }
 
       router.push("/projects?create=1&fromOnboarding=1");

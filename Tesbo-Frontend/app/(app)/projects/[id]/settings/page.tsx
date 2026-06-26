@@ -50,26 +50,22 @@ type WorkspaceMember = { userId: string; email: string; name: string; role: stri
 
 const PLATFORM_ROLES = [
   { value: "owner", label: "Owner" },
-  { value: "admin", label: "Admin" },
   { value: "manager", label: "Manager" },
-  { value: "member", label: "Member" },
+  { value: "qa_engineer", label: "QA Engineer" },
 ] as const;
 
-function normalizeRole(role: string): (typeof PLATFORM_ROLES)[number]["value"] {
-  const normalized = role.trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_");
-  if (normalized === "project_admin") return "admin";
-  if (normalized === "test_manager") return "manager";
-  if (normalized === "qa_member" || normalized === "viewer") return "member";
-  if (normalized === "owner" || normalized === "admin" || normalized === "manager" || normalized === "member") {
-    return normalized;
-  }
-  return "member";
+function normalizeRole(role: string): "owner" | "manager" | "qa_engineer" {
+  const n = (role ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/ /g, "_");
+  if (n === "owner") return "owner";
+  if (["manager", "admin", "test_manager"].includes(n)) return "manager";
+  return "qa_engineer";
 }
 
 function roleLabel(role: string): string {
-  const normalized = normalizeRole(role);
-  const match = PLATFORM_ROLES.find((item) => item.value === normalized);
-  return match?.label ?? "Member";
+  const n = normalizeRole(role);
+  if (n === "owner") return "Owner";
+  if (n === "manager") return "Manager";
+  return "QA Engineer";
 }
 
 export default function ProjectSettingsPage() {
@@ -96,7 +92,7 @@ export default function ProjectSettingsPage() {
   const [membersLoading, setMembersLoading] = useState(true);
   const [memberError, setMemberError] = useState<string | null>(null);
   const [addUserId, setAddUserId] = useState("");
-  const [addRole, setAddRole] = useState<string>("member");
+  const [addRole, setAddRole] = useState<string>("qa_engineer");
   const [addingMember, setAddingMember] = useState(false);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
   const [changingRoleId, setChangingRoleId] = useState<string | null>(null);
@@ -327,14 +323,13 @@ export default function ProjectSettingsPage() {
   const availableToAdd = workspaceMembers.filter((member) => !memberIds.has(member.userId));
 
   const currentUserRole = currentUserId
-    ? normalizeRole(projectMembers.find((m) => m.userId === currentUserId)?.role ?? "member")
-    : "member";
-  const canManageMembers = currentUserRole === "owner" || currentUserRole === "admin" || currentUserRole === "manager";
+    ? normalizeRole(projectMembers.find((m) => m.userId === currentUserId)?.role ?? "qa_engineer")
+    : "qa_engineer";
+  const canManageMembers = currentUserRole === "owner" || currentUserRole === "manager";
 
   function assignableRoles(): { value: string; label: string }[] {
-    if (currentUserRole === "owner") return [{ value: "owner", label: "Owner" }, { value: "admin", label: "Admin" }, { value: "manager", label: "Manager" }, { value: "member", label: "Member" }];
-    if (currentUserRole === "admin") return [{ value: "manager", label: "Manager" }, { value: "member", label: "Member" }];
-    if (currentUserRole === "manager") return [{ value: "member", label: "Member" }];
+    if (currentUserRole === "owner") return [{ value: "manager", label: "Manager" }, { value: "qa_engineer", label: "QA Engineer" }];
+    if (currentUserRole === "manager") return [{ value: "qa_engineer", label: "QA Engineer" }];
     return [];
   }
 
@@ -343,8 +338,7 @@ export default function ProjectSettingsPage() {
     if (member.userId === currentUserId) return false;
     const targetRole = normalizeRole(member.role);
     if (targetRole === "owner") return false;
-    if (currentUserRole === "manager" && targetRole === "admin") return false;
-    if (currentUserRole === "admin" && targetRole === "admin") return false;
+    if (currentUserRole === "manager" && targetRole === "manager") return false;
     return true;
   }
 
@@ -359,7 +353,7 @@ export default function ProjectSettingsPage() {
     try {
       await addProjectMember(projectId, { userId: addUserId, role: addRole });
       setAddUserId("");
-      setAddRole("member");
+      setAddRole("qa_engineer");
       await loadMembers();
     } catch {
       setMemberError("Failed to add project member.");

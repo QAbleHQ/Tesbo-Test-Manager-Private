@@ -3,6 +3,7 @@ import type { Response } from "express";
 import { AuditService } from "../audit/audit.service";
 import { AuthenticatedRequest } from "../common/request.types";
 import { AppConfigService } from "../config/app-config.service";
+import { DatabaseService } from "../database/database.service";
 import { SuperAdminService } from "../admin/super-admin.service";
 import { OtpService } from "./otp.service";
 import { PasswordService } from "./password.service";
@@ -11,6 +12,7 @@ import { PasswordService } from "./password.service";
 export class AuthService {
   constructor(
     private readonly config: AppConfigService,
+    private readonly db: DatabaseService,
     private readonly otp: OtpService,
     private readonly password: PasswordService,
     private readonly audit: AuditService,
@@ -69,7 +71,16 @@ export class AuthService {
   }
 
   async me(userId: string) {
-    return { userId, isPlatformAdmin: await this.superAdmin.isPlatformAdmin(userId) };
+    const [isPlatformAdmin, userRow] = await Promise.all([
+      this.superAdmin.isPlatformAdmin(userId),
+      this.db.query<{ email: string; name: string | null }>("SELECT email, name FROM users WHERE id = $1", [userId])
+    ]);
+    return {
+      userId,
+      isPlatformAdmin,
+      email: userRow.rows[0]?.email ?? null,
+      name: userRow.rows[0]?.name ?? null
+    };
   }
 
   private setSessionCookie(req: AuthenticatedRequest, res: Response, token: string, maxAgeSeconds: number) {

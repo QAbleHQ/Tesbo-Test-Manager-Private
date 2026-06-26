@@ -11,7 +11,7 @@ import { AdminModule } from "../admin/admin.module";
   imports: [AdminModule],
   controllers: [AuthController],
   providers: [AuthService, AuthMiddleware, EmailService, OtpService, PasswordService],
-  exports: [AuthService, OtpService, PasswordService, AuthMiddleware]
+  exports: [AuthService, OtpService, PasswordService, AuthMiddleware, EmailService]
 })
 export class AuthModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
