@@ -931,6 +931,7 @@ export class LegacyController {
     if ("redirectUrl" in access) return res.redirect(302, access.redirectUrl);
     res.setHeader("Content-Type", access.mimeType);
     res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(access.originalFileName)}"`);
+    if ("buffer" in access) return res.send(access.buffer);
     res.sendFile(access.localPath);
   }
 

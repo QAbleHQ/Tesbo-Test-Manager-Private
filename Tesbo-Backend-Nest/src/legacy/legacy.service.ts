@@ -3954,6 +3954,14 @@ export class LegacyService implements OnModuleInit {
       throw new NotFoundException({ error: "File content is not available" });
     }
     const mimeType = file.mime_type || "application/octet-stream";
+    const ext = String(file.file_extension || "").toLowerCase().replace(/^\./, "");
+    // Plaintext previews are fetched client-side with credentials to our own API; streaming them
+    // directly (instead of redirecting to a presigned URL) avoids needing the storage bucket's
+    // CORS policy to allow credentialed cross-origin requests.
+    if (inline && LegacyService.KB_PLAINTEXT_EXTENSIONS.has(ext)) {
+      const buffer = await this.storage.getBuffer(file.storage_key);
+      return { buffer, mimeType, originalFileName: file.original_file_name };
+    }
     const access = await this.storage.getAccessUrl(file.storage_key, { filename: file.original_file_name, inline, contentType: mimeType });
     return { ...access, mimeType, originalFileName: file.original_file_name };
   }
