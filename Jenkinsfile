@@ -1,7 +1,12 @@
 // Auto-deploy on main + SonarQube scan before deploy.
- // Sonar secrets: Jenkins Managed file id = tesbo-test-manager-env
- //   (SONAR_HOST_URL, SONAR_TOKEN) — do not put token in git.
- // Sonar failure does NOT block deploy (catchError) — so prod deploy keeps working.
+// Sonar secrets: Jenkins Managed file id = tesbo-test-manager-env
+// Sonar failure does NOT block deploy (catchError).
+ //
+ // Low-downtime deploy:
+ //   - NEVER `docker compose down` (that kills the whole site during build)
+ //   - Build images first while old containers keep serving traffic
+ //   - Then `up -d` swaps only changed services (postgres/redis usually stay up)
+ //   - Expect a short blip (few seconds) when frontend/backend containers recreate
  // Never: docker compose down -v
 
 pipeline {
@@ -49,7 +54,6 @@ pipeline {
               test -n "${SONAR_TOKEN:-}" || { echo "SONAR_TOKEN missing in tesbo-test-manager-env"; exit 1; }
 
               echo "==> SonarQube scan → ${SONAR_HOST_URL}"
-              echo "==> Project key: Tesbo-Test-Manager-Private"
               docker run --rm \
                 -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
                 -e SONAR_TOKEN="${SONAR_TOKEN}" \
@@ -79,11 +83,17 @@ pipeline {
             git checkout -f main
             git reset --hard origin/main
             git log -1 --oneline
-            docker compose down
-            docker compose up --build -d
-            sleep 15
+
+            echo '==> Building images (site stays UP)'
+            docker compose build
+
+            echo '==> Rolling containers (no full down)'
+            docker compose up -d --remove-orphans
+
+            sleep 20
             docker compose ps
             curl -fsS http://127.0.0.1:1011/health || true
+            curl -fsS -o /dev/null -w 'frontend_local:%{http_code}\\n' http://127.0.0.1:1010/ || true
             echo Deploy finished
           "
         '''
@@ -107,10 +117,10 @@ pipeline {
       echo "OK: ${env.GIT_SHA} deploy → https://app.tesbo.io/projects"
     }
     unstable {
-      echo "Deploy may have succeeded but Sonar was UNSTABLE. Fix Sonar project/token permissions on ${env.SONAR_HOST_URL ?: 'SonarQube'}."
+      echo "Deploy may have succeeded but Sonar was UNSTABLE."
     }
     failure {
-      echo "Failed. Check deploy/SSH. Sonar alone should not block deploy anymore."
+      echo "Failed. Check deploy/SSH on tesbo."
     }
   }
 }
