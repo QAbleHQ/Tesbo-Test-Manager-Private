@@ -10,6 +10,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@betterbugs/web-sdk": "^0.0.44",
     "@middleware.io/node-apm": "^2.4.2",
     "@tabler/icons-react": "^3.44.0",
     "@tiptap/extension-image": "^3.27.1",

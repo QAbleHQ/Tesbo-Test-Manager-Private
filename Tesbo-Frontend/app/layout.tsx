@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { THEME_STORAGE_KEY } from "@/lib/theme";
+import BetterBugsWidget from "@/components/BetterBugsWidget";
 
 const inter = localFont({
   src: "../public/fonts/inter-variable.woff2",
@@ -56,6 +57,7 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         {children}
+        <BetterBugsWidget />
       </body>
     </html>
   );

@@ -121,6 +121,8 @@ services:
       context: ./Tesbo-Frontend
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:1011}
+        NEXT_PUBLIC_BETTERBUGS_API_KEY: ${NEXT_PUBLIC_BETTERBUGS_API_KEY:-}
+        NEXT_PUBLIC_BETTERBUGS_PROJECT_ID: ${NEXT_PUBLIC_BETTERBUGS_PROJECT_ID:-}
     restart: unless-stopped
     depends_on:
       backend:
