@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   authMe,
   getWorkspace,
@@ -12,6 +12,7 @@ import {
   updateIntegrationConfig,
   connectIntegrationToken,
   disconnectIntegration,
+  INTEGRATION_RETURN_PROJECT_KEY,
   type IntegrationOAuthConfig,
   type IntegrationConnectionStatus,
   type IntegrationProvider,
@@ -27,8 +28,8 @@ type PatField = {
   help?: string;
 };
 
-// Providers that don't support a Personal Access Token yet simply set `null` here — the tab
-// disappears automatically, no other file needs to change.
+// Providers that don't support a Personal Access Token yet simply set `null` here — the
+// advanced token panel disappears automatically, no other file needs to change.
 const PROVIDER_PAT_FIELDS: Record<IntegrationProvider, PatField[] | null> = {
   jira: [
     { key: "siteUrl", label: "Jira site URL", type: "url", placeholder: "https://yourcompany.atlassian.net" },
@@ -52,7 +53,24 @@ const PROVIDER_PAT_FIELDS: Record<IntegrationProvider, PatField[] | null> = {
   ],
 };
 
-export function WorkspaceIntegrationConfig({
+function isValidProjectId(value: string | null): value is string {
+  return !!value && /^[a-zA-Z0-9-]+$/.test(value);
+}
+
+function ChevronIcon() {
+  return (
+    <svg
+      className="h-4 w-4 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-180"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+    </svg>
+  );
+}
+
+function WorkspaceIntegrationConfigInner({
   provider,
   label,
   consoleName,
@@ -66,6 +84,9 @@ export function WorkspaceIntegrationConfig({
   scopes: string[];
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnProjectIdParam = searchParams.get("returnProjectId");
+  const returnProjectId = isValidProjectId(returnProjectIdParam) ? returnProjectIdParam : null;
 
   const [loading, setLoading] = useState(true);
   const [canManage, setCanManage] = useState(false);
@@ -80,7 +101,6 @@ export function WorkspaceIntegrationConfig({
   const [redirectUri, setRedirectUri] = useState("");
 
   const patFields = PROVIDER_PAT_FIELDS[provider];
-  const [authTab, setAuthTab] = useState<"oauth" | "personal_token">("oauth");
   const [patValues, setPatValues] = useState<Record<string, string>>({});
   const [connectingToken, setConnectingToken] = useState(false);
 
@@ -139,6 +159,8 @@ export function WorkspaceIntegrationConfig({
     setConnecting(true);
     setMessage(null);
     try {
+      if (returnProjectId) sessionStorage.setItem(INTEGRATION_RETURN_PROJECT_KEY, returnProjectId);
+      else sessionStorage.removeItem(INTEGRATION_RETURN_PROJECT_KEY);
       const { url } = await getIntegrationAuthUrl(provider);
       window.location.href = url;
     } catch (err) {
@@ -274,33 +296,39 @@ export function WorkspaceIntegrationConfig({
       ) : (
         canManage && (
           <div className="space-y-4">
-            {patFields && (
-              <div className="flex gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-1 text-sm">
-                <button
-                  type="button"
-                  onClick={() => setAuthTab("oauth")}
-                  className={`flex-1 rounded-md px-3 py-1.5 font-medium transition-colors ${
-                    authTab === "oauth" ? "bg-[var(--surface)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted)]"
-                  }`}
-                >
-                  OAuth 2.0
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAuthTab("personal_token")}
-                  className={`flex-1 rounded-md px-3 py-1.5 font-medium transition-colors ${
-                    authTab === "personal_token" ? "bg-[var(--surface)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted)]"
-                  }`}
-                >
-                  Personal Access Token
-                </button>
-              </div>
-            )}
-
-            {authTab === "oauth" ? (
-              <Card className="p-4">
-                <h2 className="text-base font-semibold text-[var(--foreground)]">Configure {label} OAuth</h2>
+            <Card className="p-4 space-y-3">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--foreground)]">Connect {label}</h2>
                 <p className="mt-1 text-sm text-[var(--muted)]">
+                  {config?.configured
+                    ? `Sign in with ${label} and pick which project to link — no manual setup needed.`
+                    : `Set up an OAuth app below (or use a Personal Access Token) to enable connecting.`}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button type="button" onClick={handleConnect} disabled={connecting || !config?.configured}>
+                  {connecting ? "Connecting..." : `Connect ${label}`}
+                </Button>
+                {config?.configured && (
+                  <span className="text-xs text-[var(--success)]">
+                    Ready via {config.source === "environment" ? "this workspace's platform connection" : "your saved OAuth app"}.
+                  </span>
+                )}
+              </div>
+              {returnProjectId && (
+                <p className="text-xs text-[var(--muted)]">
+                  You&apos;ll be brought straight back to finish mapping your project after connecting.
+                </p>
+              )}
+            </Card>
+
+            <details className="tesbo-card group p-4" open={config?.source !== "environment"}>
+              <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-[var(--foreground)]">
+                <span>Advanced: OAuth app settings</span>
+                <ChevronIcon />
+              </summary>
+              <div className="mt-4">
+                <p className="text-sm text-[var(--muted)]">
                   Add the OAuth app values from the {consoleName}. These values apply to this entire workspace.
                 </p>
 
@@ -356,22 +384,19 @@ export function WorkspaceIntegrationConfig({
                     <Button type="submit" disabled={saving}>
                       {saving ? "Saving..." : `Save ${label} Configuration`}
                     </Button>
-                    <Button type="button" variant="secondary" onClick={handleConnect} disabled={connecting || !config?.configured}>
-                      {connecting ? "Connecting..." : `Connect ${label}`}
-                    </Button>
-                    {config?.configured && (
-                      <span className="text-xs text-[var(--success)]">
-                        Configuration saved from {config.source === "environment" ? "environment variables" : "workspace settings"}.
-                      </span>
-                    )}
                   </div>
                 </form>
-              </Card>
-            ) : (
-              patFields && (
-                <Card className="p-4">
-                  <h2 className="text-base font-semibold text-[var(--foreground)]">Connect {label} with a Personal Access Token</h2>
-                  <p className="mt-1 text-sm text-[var(--muted)]">
+              </div>
+            </details>
+
+            {patFields && (
+              <details className="tesbo-card group p-4">
+                <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-[var(--foreground)]">
+                  <span>Advanced: connect with a Personal Access Token instead</span>
+                  <ChevronIcon />
+                </summary>
+                <div className="mt-4">
+                  <p className="text-sm text-[var(--muted)]">
                     No OAuth app required — paste a personal token below to connect this workspace directly.
                   </p>
                   <form onSubmit={handleConnectToken} className="mt-4 space-y-4">
@@ -391,12 +416,34 @@ export function WorkspaceIntegrationConfig({
                       {connectingToken ? "Connecting..." : `Connect ${label}`}
                     </Button>
                   </form>
-                </Card>
-              )
+                </div>
+              </details>
             )}
           </div>
         )
       )}
     </StandardPageLayout>
+  );
+}
+
+export function WorkspaceIntegrationConfig(props: {
+  provider: IntegrationProvider;
+  label: string;
+  consoleName: string;
+  consoleSteps: string[];
+  scopes: string[];
+}) {
+  return (
+    <Suspense
+      fallback={
+        <StandardPageLayout header={<PageHeader title={`${props.label} Integration`} />}>
+          <div className="flex min-h-[200px] items-center justify-center">
+            <p className="text-[var(--muted)]">Loading…</p>
+          </div>
+        </StandardPageLayout>
+      }
+    >
+      <WorkspaceIntegrationConfigInner {...props} />
+    </Suspense>
   );
 }

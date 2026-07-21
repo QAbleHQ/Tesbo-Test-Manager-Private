@@ -6,6 +6,7 @@ import { getJiraStatus, listJiraProjects, connectJiraProjects, syncJiraTickets }
 export default function JiraProjectIntegrationPage() {
   return (
     <ProjectIntegrationMapping
+      provider="jira"
       label="Jira"
       remoteUnitLabel="Jira project"
       workspaceConfigHref="/settings/integrations/jira"

@@ -5653,7 +5653,8 @@ export class LegacyService implements OnModuleInit {
           knowledge: knowledgeForChat,
           existingTestcases,
           jiraIssueKeys: mentionedJiraKeys,
-          projectTestcaseRange
+          projectTestcaseRange,
+          suites: projectSnapshot.suites
         });
         return this.applyStorageGateToGenerated(decision, capabilities);
       } catch (err) {
@@ -5677,7 +5678,7 @@ export class LegacyService implements OnModuleInit {
       "- answer: answer product, feature, test strategy, or knowledge-base questions conversationally.",
       "- list: show existing testcase or coverage rows when the user asks to show/list/compare coverage.",
       "- jira_pending_testcases: count Jira tickets, linked testcase coverage, and pending tickets for testcase writing.",
-      "- create: create new testcase drafts/saved cases only when the user clearly asks to create/generate/add/write testcases.",
+      "- create: create new testcase drafts/saved cases only when the user clearly asks to create/generate/add/write testcases. If the user names an existing suite for these new testcases (or a prior turn already established one, e.g. confirming 'yes' to save into the suite you just discussed), set operation.suiteId (preferred, from 'Existing suites' below) or operation.suiteName directly on the create operation so the testcase lands in that suite immediately — do not require a separate move_to_suite step for testcases you are creating in this same turn.",
       "- update: update an existing testcase only when the user clearly asks to update/edit/mark/revise a testcase.",
       "- archive: archive an existing testcase when the user asks to remove/delete/archive testcase coverage. IMPORTANT: before archiving, always describe which testcases will be archived and explicitly ask the user to confirm (e.g. 'I found TC-5 Login Test. Should I archive it? Reply yes to confirm.'). Only include archive operations if the user's current message is a clear confirmation (yes, confirm, go ahead, proceed) after you already proposed what would be archived in the prior assistant turn.",
       "- create_suite: create a new test suite (a folder/group for testcases) when the user asks to create/add a suite, folder, or group. Put the suite name in operation.suiteName.",
@@ -5771,7 +5772,8 @@ export class LegacyService implements OnModuleInit {
           knowledge: knowledgeForChat,
           existingTestcases,
           jiraIssueKeys: mentionedJiraKeys,
-          projectTestcaseRange
+          projectTestcaseRange,
+          suites: projectSnapshot.suites
         });
         return this.applyStorageGateToGenerated(decision, capabilities);
       }
@@ -5796,27 +5798,60 @@ export class LegacyService implements OnModuleInit {
       if (op.type === "create_suite" || op.type === "move_to_suite") return capabilities.suiteOperations;
       return false;
     });
+    // Ids created earlier in THIS batch — merged into fromLastPlan resolution below so a single
+    // turn that both creates testcases and moves them (fromLastPlan:true) works in one shot,
+    // instead of only seeing last_completed_plan from a prior turn (see resolveZyraMoveTargets).
+    const createdThisTurn: string[] = [];
     for (const op of allowed.slice(0, 10)) {
       if (op.type === "create" && op.draft) {
+        // A create op may name a target suite directly (op.suiteId / op.suiteName) so a new
+        // testcase can land in the right suite in the same step, mirroring how the Task-based
+        // flow (zyraSave) resolves a suite before creating — chat creates used to always land
+        // unassigned (suite_id NULL) because this resolution never happened.
+        let suiteId: string | null = null;
+        if (op.suiteId) {
+          const suite = await this.getProjectSuite(projectId, op.suiteId);
+          suiteId = suite ? suite.id : null;
+        } else if (op.suiteName) {
+          const suite = await this.resolveOrCreateSuiteByName(projectId, op.suiteName);
+          suiteId = suite.id;
+          if (suite.created) {
+            activity.push({ actor: "agent", title: "Created suite", detail: suite.name, createdAt: new Date().toISOString() });
+            await this.logProjectActivity(projectId, actorId, "zyra_suite_created", "suite", suite.id, suite.name, { source: "zyra_chat", reason: op.reason || null });
+          }
+        }
+        const draftPayload = {
+          suiteId,
+          title: op.draft.title,
+          description: op.draft.description || op.draft.expectedSummary || "",
+          preconditions: op.draft.preconditions || "",
+          stepsJson: this.safeSteps(op.draft.stepsJson || op.draft.steps),
+          testData: op.draft.testData || "",
+          priority: op.draft.priority || "P2",
+          severity: op.draft.severity || null,
+          type: op.draft.type || "Functional",
+          status: op.draft.status || "Draft",
+          component: op.draft.component || null,
+          jiraIssueKey: op.draft.jiraIssueKey || null
+        };
         let created: Body | null = null;
         try {
-          created = await this.createTestCase(projectId, actorId, {
-            title: op.draft.title,
-            description: op.draft.description || op.draft.expectedSummary || "",
-            preconditions: op.draft.preconditions || "",
-            stepsJson: this.safeSteps(op.draft.stepsJson || op.draft.steps),
-            testData: op.draft.testData || "",
-            priority: op.draft.priority || "P2",
-            severity: op.draft.severity || null,
-            type: op.draft.type || "Functional",
-            status: op.draft.status || "Draft",
-            component: op.draft.component || null,
-            jiraIssueKey: op.draft.jiraIssueKey || null
-          });
+          created = await this.createTestCase(projectId, actorId, draftPayload);
         } catch (err: unknown) {
-          if ((err as { code?: string })?.code === "23505") continue; // duplicate — skip silently
-          throw err;
+          if ((err as { code?: string })?.code !== "23505") throw err;
+          // Unique violation on (project_id, external_id) — nextExternalId computes MAX+1
+          // without locking, so concurrent requests (e.g. a double-submitted message) can race.
+          // Retry once now that the colliding row has committed and a fresh id can be computed;
+          // only give up (with a visible activity entry, not a silent drop) if it collides again.
+          try {
+            created = await this.createTestCase(projectId, actorId, draftPayload);
+          } catch (retryErr: unknown) {
+            if ((retryErr as { code?: string })?.code !== "23505") throw retryErr;
+            activity.push({ actor: "agent", title: "Could not create testcase", detail: `${op.draft.title || "Untitled test case"} (external id conflict)`, createdAt: new Date().toISOString() });
+            continue;
+          }
         }
+        createdThisTurn.push(created.id);
         const row = await this.getTestCase(created.id);
         testcases.push(this.chatTestcaseRow(row, "created", op.reason));
         activity.push({ actor: "agent", title: "Created testcase", detail: `${created.externalId} ${created.title}`, createdAt: new Date().toISOString() });
@@ -5842,7 +5877,7 @@ export class LegacyService implements OnModuleInit {
           ? await this.getProjectSuite(projectId, op.suiteId)
           : await this.resolveOrCreateSuiteByName(projectId, String(op.suiteName));
         if (!suite) continue;
-        const targets = await this.resolveZyraMoveTargets(projectId, sessionId, op, suite.id);
+        const targets = await this.resolveZyraMoveTargets(projectId, sessionId, op, suite.id, createdThisTurn);
         if (!targets.length) continue;
         const movedIds = targets.map((target) => target.id);
         await this.db.query(
@@ -5882,12 +5917,15 @@ export class LegacyService implements OnModuleInit {
   // Resolve which existing testcases a move_to_suite op should affect: every non-archived testcase
   // (allExisting), the ones named by external id / internal id, or — when the model set
   // fromLastPlan (see the move_to_suite prompt instructions) — every testcase tracked in
-  // last_completed_plan. That tracking exists because the model's own view of "which
-  // testcases did we just generate" is limited to the last 12 chat messages, which a
-  // multi-batch plan can easily outgrow; last_completed_plan is a durable, exact record
-  // instead of something the model has to re-enumerate from a possibly-truncated history.
-  // Never creates testcases.
-  private async resolveZyraMoveTargets(projectId: string, sessionId: string, op: ZyraChatDecision["operations"][number], targetSuiteId: string): Promise<Array<{ id: string }>> {
+  // last_completed_plan, unioned with any ids created earlier in the SAME batch. That union
+  // matters because last_completed_plan is only persisted after the whole batch finishes
+  // (see sendZyraChatMessage), so a single turn that both creates testcases and moves them
+  // (fromLastPlan:true) would otherwise see only the previous turn's batch, or none at all.
+  // last_completed_plan tracking exists because the model's own view of "which testcases did
+  // we just generate" is limited to the last 12 chat messages, which a multi-batch plan can
+  // easily outgrow; it's a durable, exact record instead of something the model has to
+  // re-enumerate from a possibly-truncated history. Never creates testcases.
+  private async resolveZyraMoveTargets(projectId: string, sessionId: string, op: ZyraChatDecision["operations"][number], targetSuiteId: string, createdThisTurn: string[] = []): Promise<Array<{ id: string }>> {
     if (op.allExisting) {
       const res = await this.db.query(
         "SELECT id FROM testcases WHERE project_id = $1 AND COALESCE(status,'') <> 'Archived' AND suite_id IS DISTINCT FROM $2::uuid AND deleted_at IS NULL",
@@ -5897,7 +5935,8 @@ export class LegacyService implements OnModuleInit {
     }
     if (op.fromLastPlan) {
       const planRes = await this.db.query("SELECT last_completed_plan FROM zyra_chat_sessions WHERE id = $1", [sessionId]).catch(() => ({ rows: [] as Body[] }));
-      const ids = normalizeJsonArray((planRes.rows[0]?.last_completed_plan as Body | undefined)?.testcaseIds).map(String);
+      const priorIds = normalizeJsonArray((planRes.rows[0]?.last_completed_plan as Body | undefined)?.testcaseIds).map(String);
+      const ids = Array.from(new Set([...createdThisTurn, ...priorIds]));
       if (!ids.length) return [];
       const res = await this.db.query(
         "SELECT id FROM testcases WHERE project_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL",
@@ -5928,8 +5967,10 @@ export class LegacyService implements OnModuleInit {
     jiraIssueKeys: string[];
     requestedCount: number;
     testcaseRange?: string;
+    suites: Array<{ id: string; name: string }>;
   }): Promise<ZyraChatDecision> {
     const jira = await this.jiraSnapshot(params.projectId, params.jiraIssueKeys);
+    const matchedSuite = this.matchZyraSuiteByName(params.message, params.suites);
     const aiResult = await this.generateZyraWithProvider({
       provider: params.provider,
       model: params.model,
@@ -5965,11 +6006,12 @@ export class LegacyService implements OnModuleInit {
       ].filter(Boolean).join(" ")
     });
     return {
-      reply: `I used the AI provider to generate ${aiResult.drafts.length} testcase candidate(s) after reading ${jira.length} Jira ticket(s), ${params.knowledge.length} knowledge-base item(s), and ${params.existingTestcases.length} nearby testcase(s).`,
+      reply: `I used the AI provider to generate ${aiResult.drafts.length} testcase candidate(s) after reading ${jira.length} Jira ticket(s), ${params.knowledge.length} knowledge-base item(s), and ${params.existingTestcases.length} nearby testcase(s).${matchedSuite ? ` Placing them in the "${matchedSuite.name}" suite.` : ""}`,
       reasoningSummary: `AI generation used ${params.provider}/${params.model}. It considered Jira keys ${params.jiraIssueKeys.length ? params.jiraIssueKeys.join(", ") : "none explicitly mentioned"}, knowledge-base context, existing coverage for duplicate avoidance, and Zyra memory. Tokens: input ${aiResult.usage.input}, output ${aiResult.usage.output}.`,
       actionType: "create",
       operations: aiResult.drafts.map((draft) => ({
         type: "create",
+        suiteId: matchedSuite?.id,
         draft: {
           ...draft,
           jiraIssueKey: params.jiraIssueKeys[0] || draft.jiraIssueKey || null
@@ -6008,6 +6050,7 @@ export class LegacyService implements OnModuleInit {
     knowledge: Array<{ title: string; content: string }>;
     existingTestcases: ZyraGenerationInput["existingTestcases"];
     jiraIssueKeys: string[];
+    suites: Array<{ id: string; name: string }>;
   }): Promise<ZyraChatDecision> {
     let scenarios: string[] = [];
     try {
@@ -6037,7 +6080,8 @@ export class LegacyService implements OnModuleInit {
         knowledge: params.knowledge,
         existingTestcases: params.existingTestcases,
         jiraIssueKeys: params.jiraIssueKeys,
-        requestedCount: 10
+        requestedCount: 10,
+        suites: params.suites
       });
     }
 
@@ -6053,7 +6097,8 @@ export class LegacyService implements OnModuleInit {
       knowledge: params.knowledge,
       existingTestcases: params.existingTestcases,
       jiraIssueKeys: params.jiraIssueKeys,
-      requestedCount: firstBatch.length
+      requestedCount: firstBatch.length,
+      suites: params.suites
     });
 
     if (!remaining.length) return decision;
@@ -6129,9 +6174,10 @@ export class LegacyService implements OnModuleInit {
         const provider = String(allocation.key.provider || "openai").toLowerCase();
         const model = normalizeProviderModel(provider, allocation.key.default_model);
         const originalMessage = String(plan.originalMessage || "");
-        const [knowledge, existingTestcases] = await Promise.all([
+        const [knowledge, existingTestcases, suites] = await Promise.all([
           this.knowledgeSnapshot(projectId),
-          this.existingTestcaseSnapshot(projectId, originalMessage, "")
+          this.existingTestcaseSnapshot(projectId, originalMessage, ""),
+          this.projectSuiteSummaries(projectId)
         ]);
         const decision = await this.generateZyraChatTestcasesWithAi({
           projectId,
@@ -6143,7 +6189,8 @@ export class LegacyService implements OnModuleInit {
           knowledge,
           existingTestcases,
           jiraIssueKeys: normalizeJsonArray(plan.jiraIssueKeys).map(String),
-          requestedCount: batch.length
+          requestedCount: batch.length,
+          suites
         });
         const gated = this.applyStorageGateToGenerated(decision, capabilities);
         const applied = await this.applyZyraChatOperations(projectId, userId, sessionId, gated.operations);
@@ -7747,6 +7794,7 @@ export class LegacyService implements OnModuleInit {
     existingTestcases: ZyraGenerationInput["existingTestcases"];
     jiraIssueKeys: string[];
     projectTestcaseRange: string;
+    suites: Array<{ id: string; name: string }>;
   }): Promise<ZyraChatDecision> {
     const plan = this.chatTestcasePlan(params.message, params.projectTestcaseRange);
     if (plan.testcaseRange === "all") {
@@ -7760,7 +7808,8 @@ export class LegacyService implements OnModuleInit {
         message: params.message,
         knowledge: params.knowledge,
         existingTestcases: params.existingTestcases,
-        jiraIssueKeys: params.jiraIssueKeys
+        jiraIssueKeys: params.jiraIssueKeys,
+        suites: params.suites
       });
     }
     return this.generateZyraChatTestcasesWithAi({
@@ -7773,6 +7822,7 @@ export class LegacyService implements OnModuleInit {
       knowledge: params.knowledge,
       existingTestcases: params.existingTestcases,
       jiraIssueKeys: params.jiraIssueKeys,
+      suites: params.suites,
       ...plan
     });
   }
@@ -7787,6 +7837,31 @@ export class LegacyService implements OnModuleInit {
     if (value === "list" || value === "list_testcases") return "list";
     if (value === "answer") return "answer";
     return fallback;
+  }
+
+  private async projectSuiteSummaries(projectId: string): Promise<Array<{ id: string; name: string; testCaseCount: number }>> {
+    const suites = await this.db.query(
+      `SELECT s.id, s.name, COUNT(t.id)::int AS test_case_count
+       FROM suites s LEFT JOIN testcases t ON t.suite_id = s.id AND t.deleted_at IS NULL
+       WHERE s.project_id = $1
+       GROUP BY s.id, s.name
+       ORDER BY s.position, s.name
+       LIMIT 50`,
+      [projectId]
+    ).catch(() => ({ rows: [] as Body[] }));
+    return suites.rows.map((row) => ({ id: String(row.id), name: String(row.name || ""), testCaseCount: Number(row.test_case_count || 0) }));
+  }
+
+  // Lightweight, deterministic suite-name detection for messages that name an existing suite
+  // (e.g. "generate test cases for the Authentication, Signup & Onboarding suite") — used so
+  // newly-created testcases can be attached to that suite in the same step, without depending
+  // on the model to separately emit a move_to_suite operation. Longest name wins so a short
+  // suite name doesn't shadow a longer one that also matches.
+  private matchZyraSuiteByName(message: string, suites: Array<{ id: string; name: string }>): { id: string; name: string } | null {
+    const lower = message.toLowerCase();
+    const candidates = suites.filter((suite) => suite.name.trim() && lower.includes(suite.name.trim().toLowerCase()));
+    if (!candidates.length) return null;
+    return candidates.reduce((longest, current) => (current.name.length > longest.name.length ? current : longest));
   }
 
   private async zyraChatProjectSnapshot(projectId: string): Promise<ZyraChatProjectSnapshot> {
@@ -7807,15 +7882,7 @@ export class LegacyService implements OnModuleInit {
          LIMIT 12`,
         [projectId]
       ).catch(() => ({ rows: [] as Body[] })),
-      this.db.query(
-        `SELECT s.id, s.name, COUNT(t.id)::int AS test_case_count
-         FROM suites s LEFT JOIN testcases t ON t.suite_id = s.id AND t.deleted_at IS NULL
-         WHERE s.project_id = $1
-         GROUP BY s.id, s.name
-         ORDER BY s.position, s.name
-         LIMIT 50`,
-        [projectId]
-      ).catch(() => ({ rows: [] as Body[] })),
+      this.projectSuiteSummaries(projectId),
       this.db.query(
         `SELECT
            COUNT(*)::int AS testcase_count,
@@ -7853,7 +7920,7 @@ export class LegacyService implements OnModuleInit {
         ...knowledge.rows.map((row) => String(row.title || "")),
         ...files.rows.map((row) => String(row.original_file_name || ""))
       ].filter(Boolean),
-      suites: suites.rows.map((row) => ({ id: String(row.id), name: String(row.name || ""), testCaseCount: Number(row.test_case_count || 0) })),
+      suites,
       testcaseCount: Number(testcases.rows[0]?.testcase_count || 0),
       linkedJiraTestcaseCount: Number(testcases.rows[0]?.linked_jira_testcase_count || 0),
       jiraConnected: Boolean((status as Body).connected),

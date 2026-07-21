@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
-import { integrationCallback, type IntegrationProvider } from "@/lib/api";
+import { integrationCallback, INTEGRATION_RETURN_PROJECT_KEY, type IntegrationProvider } from "@/lib/api";
 
 const PROVIDER_LABELS: Record<IntegrationProvider, string> = { jira: "Jira", linear: "Linear" };
 
@@ -35,7 +35,11 @@ function CallbackHandler() {
     integrationCallback(provider, code)
       .then(() => {
         setStatus("success");
-        router.replace(`/settings/integrations/${provider}`);
+        const returnProjectId = sessionStorage.getItem(INTEGRATION_RETURN_PROJECT_KEY);
+        sessionStorage.removeItem(INTEGRATION_RETURN_PROJECT_KEY);
+        router.replace(
+          returnProjectId ? `/projects/${returnProjectId}/settings/integrations/${provider}` : `/settings/integrations/${provider}`
+        );
       })
       .catch((err) => {
         setStatus("error");

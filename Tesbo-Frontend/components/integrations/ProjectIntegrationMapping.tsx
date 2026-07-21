@@ -3,7 +3,14 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { authMe } from "@/lib/api";
+import {
+  authMe,
+  getWorkspace,
+  getIntegrationConfig,
+  getIntegrationAuthUrl,
+  INTEGRATION_RETURN_PROJECT_KEY,
+  type IntegrationProvider,
+} from "@/lib/api";
 import { Button, Card } from "@/components/ui";
 import { PageHeader, StandardPageLayout } from "@/components/workflows";
 
@@ -21,6 +28,7 @@ interface ConnectionStatus {
 }
 
 export function ProjectIntegrationMapping({
+  provider,
   label,
   remoteUnitLabel,
   workspaceConfigHref,
@@ -29,6 +37,7 @@ export function ProjectIntegrationMapping({
   saveMapping,
   sync,
 }: {
+  provider: IntegrationProvider;
   label: string;
   remoteUnitLabel: string;
   workspaceConfigHref: string;
@@ -42,6 +51,9 @@ export function ProjectIntegrationMapping({
   const projectId = params.id as string;
 
   const [loading, setLoading] = useState(true);
+  const [canManage, setCanManage] = useState(false);
+  const [oauthConfigured, setOauthConfigured] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [remoteItems, setRemoteItems] = useState<RemoteItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -57,7 +69,8 @@ export function ProjectIntegrationMapping({
         router.replace("/login");
         return;
       }
-      const statusRes = await fetchStatus(projectId);
+      const [workspace, statusRes] = await Promise.all([getWorkspace(), fetchStatus(projectId)]);
+      setCanManage((workspace.role || "member").toLowerCase() === "owner");
       setStatus(statusRes);
 
       if (statusRes.connected) {
@@ -66,17 +79,33 @@ export function ProjectIntegrationMapping({
         setRemoteItems(items);
         setSelected(new Set(items.filter((item) => item.connected).map((item) => item.id)));
         setItemsLoading(false);
+      } else {
+        const config = await getIntegrationConfig(provider).catch(() => null);
+        setOauthConfigured(!!config?.configured);
       }
     } catch {
       setMessage({ type: "error", text: `Failed to load ${label} integration data.` });
     } finally {
       setLoading(false);
     }
-  }, [projectId, router, fetchStatus, fetchRemoteList, label]);
+  }, [projectId, router, fetchStatus, fetchRemoteList, label, provider]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  async function handleConnect() {
+    setConnecting(true);
+    setMessage(null);
+    try {
+      sessionStorage.setItem(INTEGRATION_RETURN_PROJECT_KEY, projectId);
+      const { url } = await getIntegrationAuthUrl(provider);
+      window.location.href = url;
+    } catch (err) {
+      setMessage({ type: "error", text: err instanceof Error ? err.message : `Failed to initiate ${label} authentication.` });
+      setConnecting(false);
+    }
+  }
 
   function toggleItem(id: string) {
     setSelected((prev) => {
@@ -143,15 +172,34 @@ export function ProjectIntegrationMapping({
         )}
         <Card className="p-4">
           <h2 className="text-base font-semibold text-[var(--foreground)]">{label} is not connected for this workspace</h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Ask a workspace owner to connect {label} once for the whole workspace, then come back here to pick which {remoteUnitLabel.toLowerCase()} feeds this project.
-          </p>
-          <Link
-            href={workspaceConfigHref}
-            className="mt-4 inline-flex h-9 items-center justify-center rounded-[10px] border border-transparent bg-[var(--brand-primary)] px-3.5 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-[var(--brand-hover)]"
-          >
-            Go to Workspace Settings → Integrations
-          </Link>
+          {canManage ? (
+            oauthConfigured ? (
+              <>
+                <p className="mt-1 text-sm text-[var(--muted)]">
+                  Connect {label} for this workspace, then pick which {remoteUnitLabel.toLowerCase()} feeds this project — right here, in one flow.
+                </p>
+                <Button type="button" onClick={handleConnect} disabled={connecting} className="mt-4">
+                  {connecting ? "Connecting..." : `Connect ${label}`}
+                </Button>
+              </>
+            ) : (
+              <>
+                <p className="mt-1 text-sm text-[var(--muted)]">
+                  Set up {label} in Workspace Settings, then you&apos;ll land right back here to pick which {remoteUnitLabel.toLowerCase()} feeds this project.
+                </p>
+                <Link
+                  href={`${workspaceConfigHref}?returnProjectId=${projectId}`}
+                  className="mt-4 inline-flex h-9 items-center justify-center rounded-[10px] border border-transparent bg-[var(--brand-primary)] px-3.5 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-[var(--brand-hover)]"
+                >
+                  Go to Workspace Settings → Integrations
+                </Link>
+              </>
+            )
+          ) : (
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Ask a workspace owner to connect {label} once for the whole workspace, then come back here to pick which {remoteUnitLabel.toLowerCase()} feeds this project.
+            </p>
+          )}
         </Card>
       </StandardPageLayout>
     );
