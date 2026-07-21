@@ -1,42 +1,37 @@
 // Auto-deploy Tesbo Test Manager (Private) on pushes to main.
 //
- // Architecture:
-//   Jenkins server = testman
-//   App server     = tesbo  (SSH host alias from testman; no droplet IP needed)
-//
- // Deploy flow: Jenkins SSHes to `tesbo`, pulls main, docker compose up --build -d
- // Safety: never runs `docker compose down -v` (keeps Postgres data).
+// Architecture:
+ //   Jenkins (testman:8081) → ssh tesbo → docker compose deploy
  //
- // One-time Jenkins credential:
- //   Manage Jenkins → Credentials → Global → Add Credentials
- //   Kind: SSH Username with private key
- //   ID: tesbo-deploy-ssh
- //   Username: root
- //   Private Key: the key testman uses for `ssh tesbo`
+ // No Jenkins SSH credential needed.
+ // Uses the OS SSH config/keys already on testman (same as: ssh tesbo).
+ //
+ // IMPORTANT: Jenkins runs as user "jenkins" (not root).
+ // On testman, one-time setup if needed:
+ //   sudo -u jenkins ssh -o StrictHostKeyChecking=accept-new tesbo hostname
+ // If that fails, copy root's tesbo key/config for the jenkins user:
+ //   sudo mkdir -p /var/lib/jenkins/.ssh
+ //   sudo cp /root/.ssh/id_rsa /root/.ssh/id_rsa.pub /root/.ssh/config /var/lib/jenkins/.ssh/ 2>/dev/null || true
+ //   sudo cp /root/.ssh/known_hosts /var/lib/jenkins/.ssh/ 2>/dev/null || true
+ //   sudo chown -R jenkins:jenkins /var/lib/jenkins/.ssh
+ //   sudo chmod 700 /var/lib/jenkins/.ssh
+ //   sudo chmod 600 /var/lib/jenkins/.ssh/id_rsa /var/lib/jenkins/.ssh/config
+ //
+ // Safety: never runs `docker compose down -v` (keeps Postgres data).
 
 pipeline {
   agent any
 
   parameters {
-    choice(
-      name: 'DEPLOY_MODE',
-      choices: ['ssh', 'local'],
-      description: 'ssh = deploy to tesbo over SSH (normal). local = only if app runs on Jenkins/testman itself.'
-    )
     string(
       name: 'DEPLOY_HOST',
       defaultValue: 'tesbo',
-      description: 'SSH host alias from testman (default: tesbo). Not a droplet IP.'
+      description: 'SSH host alias from testman (default: tesbo).'
     )
     string(
       name: 'DEPLOY_USER',
       defaultValue: 'root',
-      description: 'SSH username on tesbo.'
-    )
-    string(
-      name: 'DEPLOY_SSH_CREDENTIAL_ID',
-      defaultValue: 'tesbo-deploy-ssh',
-      description: 'Jenkins SSH credential ID used to connect testman → tesbo.'
+      description: 'SSH user on tesbo.'
     )
     string(
       name: 'DEPLOY_PATH',
@@ -58,9 +53,9 @@ pipeline {
   environment {
     REPO_URL    = 'https://github.com/QAbleHQ/Tesbo-Test-Manager-Private.git'
     APP_HEALTH  = "${env.APP_HEALTH ?: 'https://app.tesbo.io'}"
-    DEPLOY_PATH = "${params.DEPLOY_PATH}"
-    DEPLOY_HOST = "${params.DEPLOY_HOST}"
-    DEPLOY_USER = "${params.DEPLOY_USER}"
+    DEPLOY_HOST = "${params.DEPLOY_HOST?.trim() ? params.DEPLOY_HOST : 'tesbo'}"
+    DEPLOY_USER = "${params.DEPLOY_USER?.trim() ? params.DEPLOY_USER : 'root'}"
+    DEPLOY_PATH = "${params.DEPLOY_PATH?.trim() ? params.DEPLOY_PATH : '/opt/tesbo-test-manager/Tesbo-Test-Manager'}"
   }
 
   stages {
@@ -75,98 +70,48 @@ pipeline {
         checkout scm
         script {
           env.GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-          echo "Deploying commit ${env.GIT_SHA} from Tesbo-Test-Manager-Private (main)"
-          echo "DEPLOY_MODE=${params.DEPLOY_MODE} HOST=${params.DEPLOY_HOST} PATH=${params.DEPLOY_PATH}"
+          echo "Deploying commit ${env.GIT_SHA}"
+          echo "Using system SSH: ${env.DEPLOY_USER}@${env.DEPLOY_HOST} (no Jenkins credential)"
         }
       }
     }
 
-    stage('Deploy (local)') {
+    stage('Deploy via ssh tesbo') {
       when {
-        allOf {
-          anyOf {
-            branch 'main'
-            expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'main' }
-          }
-          expression { params.DEPLOY_MODE == 'local' }
+        anyOf {
+          branch 'main'
+          expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'main' }
         }
       }
       steps {
         sh '''
           set -eu
-          echo "==> Local deploy at ${DEPLOY_PATH}"
-          test -d "${DEPLOY_PATH}" || { echo "ERROR: ${DEPLOY_PATH} not found on testman. Use DEPLOY_MODE=ssh to deploy on tesbo."; exit 1; }
-          cd "${DEPLOY_PATH}"
 
-          git remote set-url origin "${REPO_URL}"
-          git fetch origin main
-          git checkout -f main
-          git reset --hard origin/main
-          git log -1 --oneline
+          SSH_OPTS="-o BatchMode=yes -o StrictHostKeyChecking=accept-new"
 
-          if docker compose version >/dev/null 2>&1; then
-            COMPOSE="docker compose"
-          elif command -v docker-compose >/dev/null 2>&1; then
-            COMPOSE="docker-compose"
-          else
-            echo "Docker Compose not found" >&2
-            exit 1
-          fi
+          echo "==> Who am I on testman?"
+          whoami
+          id
 
-          $COMPOSE down
-          $COMPOSE up --build -d
-          sleep 15
-          $COMPOSE ps
-          curl -fsS "http://127.0.0.1:1011/health" || curl -fsS "http://127.0.0.1:7000/health" || true
-        '''
-      }
-    }
+          echo "==> Testing SSH to ${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" "hostname && pwd"
 
-    stage('Deploy (ssh)') {
-      when {
-        allOf {
-          anyOf {
-            branch 'main'
-            expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'main' }
-          }
-          expression { params.DEPLOY_MODE == 'ssh' }
-        }
-      }
-      steps {
-        withCredentials([
-          sshUserPrivateKey(
-            credentialsId: "${params.DEPLOY_SSH_CREDENTIAL_ID}",
-            keyFileVariable: 'SSH_KEY',
-            usernameVariable: 'SSH_USER'
-          )
-        ]) {
-          sh '''
-            set -eu
-            USER_NAME="${DEPLOY_USER:-$SSH_USER}"
-            SSH_OPTS="-i ${SSH_KEY} -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
-
-            echo "==> Connecting to ${USER_NAME}@${DEPLOY_HOST}"
-            echo "==> Deploy path: ${DEPLOY_PATH}"
-            echo "==> Commit: ${GIT_SHA}"
-
-            # Quick connectivity check (same path Jenkins will use)
-            ssh ${SSH_OPTS} "${USER_NAME}@${DEPLOY_HOST}" "hostname && pwd"
-
-            ssh ${SSH_OPTS} "${USER_NAME}@${DEPLOY_HOST}" bash -s <<EOF
+          echo "==> Deploying commit ${GIT_SHA} on tesbo"
+          ssh ${SSH_OPTS} "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<EOF
 set -eu
 cd "${DEPLOY_PATH}"
 
-echo "==> Verify / set private repo remote"
+echo "==> Remote / set private repo"
 git remote set-url origin "${REPO_URL}"
 git remote -v
 
-echo "==> Fetch and reset to origin/main (code only; DB volumes untouched)"
+echo "==> Pull latest main (DB volumes untouched)"
 git fetch origin main
 git checkout -f main
 git reset --hard origin/main
 git log -1 --oneline
 
-echo "==> Redeploy with Docker Compose (NO -v — keeps database)"
+echo "==> Docker Compose redeploy (NO -v)"
 if docker compose version >/dev/null 2>&1; then
   COMPOSE="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then
@@ -184,8 +129,7 @@ sleep 15
 curl -fsS "http://127.0.0.1:1011/health" || curl -fsS "http://127.0.0.1:7000/health" || true
 echo "==> Deploy finished on tesbo"
 EOF
-          '''
-        }
+        '''
       }
     }
 
@@ -199,10 +143,9 @@ EOF
       steps {
         sh '''
           set -eu
-          echo "==> Checking public frontend"
           curl -fsS -o /dev/null -w "frontend:%{http_code}\\n" "${APP_HEALTH}/login" || \
             curl -fsS -o /dev/null -w "frontend:%{http_code}\\n" "${APP_HEALTH}/" || true
-          echo "Smoke check done. Open ${APP_HEALTH}/projects"
+          echo "Open ${APP_HEALTH}/projects"
         '''
       }
     }
@@ -210,15 +153,14 @@ EOF
 
   post {
     success {
-      echo "Deploy succeeded for ${env.GIT_SHA}. Site: https://app.tesbo.io/projects"
+      echo "Deploy succeeded for ${env.GIT_SHA}. https://app.tesbo.io/projects"
     }
     failure {
       echo """
 Deploy failed.
-Setup checklist on testman Jenkins:
-  1) Credential ID tesbo-deploy-ssh (SSH key that can: ssh root@tesbo)
-  2) Build params: DEPLOY_MODE=ssh, DEPLOY_HOST=tesbo
-  3) On testman shell, verify: ssh root@tesbo hostname
+On testman, Jenkins runs as user 'jenkins'. Verify:
+  sudo -u jenkins ssh tesbo hostname
+If that fails, copy SSH keys from root to jenkins (see Jenkinsfile header comments).
 """
     }
   }
