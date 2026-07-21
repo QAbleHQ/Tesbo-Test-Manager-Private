@@ -35,6 +35,19 @@ import RichTextEditor from "@/components/knowledge-base/RichTextEditor";
 
 type SaveStatus = "saved" | "saving" | "unsaved";
 
+// Keep in sync with MAX_REQUEST_BODY_SIZE / maxRequestBodySize in Tesbo-Backend-Nest/src/config/app-config.service.ts
+const MAX_DOCUMENT_PAYLOAD_BYTES = 20 * 1024 * 1024;
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function documentPayloadSize(payload: { contentJson: JSONContent; contentHtml: string; contentText: string } | null): number {
+  if (!payload) return 0;
+  return new Blob([JSON.stringify(payload.contentJson), payload.contentHtml, payload.contentText]).size;
+}
+
 const DOC_TYPE_LABELS: Record<string, string> = {
   general: "General",
   api_note: "API Note",
@@ -109,9 +122,17 @@ export default function KnowledgeDocumentPage() {
       setSaveStatus("unsaved");
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
+        const payload = latestContent.current;
+        const size = documentPayloadSize(payload);
+        if (size > MAX_DOCUMENT_PAYLOAD_BYTES) {
+          setError(
+            `This document is ${formatFileSize(size)}, which is over the ${formatFileSize(MAX_DOCUMENT_PAYLOAD_BYTES)} limit we currently support. Split it into smaller documents to save.`
+          );
+          setSaveStatus("unsaved");
+          return;
+        }
         setSaveStatus("saving");
         try {
-          const payload = latestContent.current;
           const updated = await updateKnowledgeDocument(projectId, documentId, {
             title: nextTitle,
             contentJson: payload?.contentJson,
@@ -141,9 +162,17 @@ export default function KnowledgeDocumentPage() {
 
   async function handleManualSave() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    const payload = latestContent.current;
+    const size = documentPayloadSize(payload);
+    if (size > MAX_DOCUMENT_PAYLOAD_BYTES) {
+      setError(
+        `This document is ${formatFileSize(size)}, which is over the ${formatFileSize(MAX_DOCUMENT_PAYLOAD_BYTES)} limit we currently support. Split it into smaller documents to save.`
+      );
+      setSaveStatus("unsaved");
+      return;
+    }
     setSaveStatus("saving");
     try {
-      const payload = latestContent.current;
       const updated = await updateKnowledgeDocument(projectId, documentId, {
         title,
         contentJson: payload?.contentJson,

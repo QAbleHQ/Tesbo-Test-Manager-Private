@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import cookieParser from "cookie-parser";
 import { randomUUID } from "crypto";
+import { json, urlencoded } from "express";
 import type { Request, Response, NextFunction } from "express";
 import { AppModule } from "./app.module";
 import { AppConfigService } from "./config/app-config.service";
@@ -10,9 +11,12 @@ import { assertEncryptionKeyConfigured } from "./common/crypto.util";
 
 async function bootstrap() {
   assertEncryptionKeyConfigured();
-  const app = await NestFactory.create(AppModule, { cors: false });
+  // bodyParser disabled here so we can raise the limit above Nest's 100kb default (see maxRequestBodySize below)
+  const app = await NestFactory.create(AppModule, { cors: false, bodyParser: false });
   const config = app.get(AppConfigService);
 
+  app.use(json({ limit: config.maxRequestBodySize }));
+  app.use(urlencoded({ extended: true, limit: config.maxRequestBodySize }));
   app.use(cookieParser());
   app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader("X-Request-Id", randomUUID());

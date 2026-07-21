@@ -106,7 +106,7 @@ export class SignupService {
   }
 
   private async completeInviteRegistration(inv: InvitationRow, pending: PendingSignupRow): Promise<string> {
-    return this.db.transaction(async (client) => {
+    const userId = await this.db.transaction(async (client) => {
       const userId = await this.insertUser(client, pending.email, pending.name, pending.password_hash);
       await client.query(
         "INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)",
@@ -131,6 +131,13 @@ export class SignupService {
       await client.query("UPDATE pending_signups SET consumed_at = now() WHERE id = $1", [pending.id]);
       return userId;
     });
+
+    await this.legacy.logWorkspaceActivity(inv.organization_id, userId, "invitation_accepted", "invitation", inv.id, inv.email, { role: inv.role, viaRegistration: true });
+    for (const projectId of inv.project_ids ?? []) {
+      await this.legacy.logProjectActivity(projectId, userId, "project_member_added", "project_member", userId, inv.email, { role: inv.role, via: "invitation_registered" });
+    }
+
+    return userId;
   }
 
   private async createUserFromPending(pending: PendingSignupRow): Promise<string> {

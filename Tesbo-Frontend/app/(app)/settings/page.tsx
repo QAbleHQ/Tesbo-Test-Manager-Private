@@ -5,12 +5,13 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { authMe, getWorkspace } from "@/lib/api";
 import { useTopBarSlots } from "@/components/TopBarSlots";
+import GeneralTab from "@/components/settings/GeneralTab";
 import MembersTab from "@/components/settings/MembersTab";
 import IntegrationsTab from "@/components/settings/IntegrationsTab";
 import AiProvidersTab from "@/components/settings/AiProvidersTab";
 import AdminsTab from "@/components/settings/AdminsTab";
 
-type SettingsTab = "members" | "integrations" | "ai" | "admins";
+type SettingsTab = "general" | "members" | "integrations" | "ai" | "admins";
 
 function WorkspaceSettingsContent() {
   const router = useRouter();
@@ -26,6 +27,7 @@ function WorkspaceSettingsContent() {
     () => [
       ...(canManageWorkspace
         ? ([
+            { key: "general", label: "General" },
             { key: "members", label: "Members" },
             { key: "integrations", label: "Integrations" },
             { key: "ai", label: "AI Providers" },
@@ -165,6 +167,7 @@ function WorkspaceSettingsContent() {
           {/* ── Tab content ── */}
           <div className="min-w-0 flex-1 overflow-y-auto p-6">
             <div className="max-w-3xl">
+              {activeTab === "general" && <GeneralTab />}
               {activeTab === "members" && <MembersTab />}
               {activeTab === "integrations" && <IntegrationsTab />}
               {activeTab === "ai" && <AiProvidersTab />}
