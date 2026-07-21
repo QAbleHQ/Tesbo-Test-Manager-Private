@@ -187,6 +187,12 @@ export default function TestCasesPage() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isImportExportMenuOpen, setIsImportExportMenuOpen] = useState(false);
   const importExportMenuRef = useRef<HTMLDivElement>(null);
+  const [importToast, setImportToast] = useState<string | null>(null);
+
+  function showImportToast(msg: string) {
+    setImportToast(msg);
+    setTimeout(() => setImportToast(null), 4000);
+  }
 
   const loadData = useCallback(async () => {
     const [suiteList, project, summary] = await Promise.all([
@@ -1305,7 +1311,10 @@ export default function TestCasesPage() {
                     />
 
                     {/* Pagination */}
-                    <div className="flex h-11 shrink-0 items-center justify-between border-t border-[var(--border)] bg-[var(--surface)] px-4 text-[12px]">
+                    <div
+                      data-testid="testcases-pagination"
+                      className="flex h-11 shrink-0 items-center justify-between border-t border-[var(--border)] bg-[var(--surface)] px-4 text-[12px]"
+                    >
                       <span className="text-[var(--muted)]">
                         <span className="font-medium text-[var(--foreground)]">{suiteCasesTotal}</span>{" "}
                         {suiteCasesTotal === 1 ? "result" : "results"}
@@ -1320,6 +1329,7 @@ export default function TestCasesPage() {
                       </span>
                       <div className="flex items-center gap-2">
                         <select
+                          data-testid="testcases-page-size"
                           value={pageSize}
                           onChange={(e) => {
                             setPageSize(Number(e.target.value));
@@ -1932,11 +1942,24 @@ export default function TestCasesPage() {
         projectId={projectId}
         open={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
-        onImported={() => {
-          void loadData();
-          void loadSelectedSuiteCases();
+        onImported={(result) => {
+          if (result.imported > 0) {
+            void loadData();
+            void loadSelectedSuiteCases();
+          }
+          showImportToast(
+            result.errors.length > 0
+              ? `${result.imported} of ${result.total} test case${result.total !== 1 ? "s" : ""} imported, ${result.errors.length} skipped`
+              : `${result.imported} test case${result.imported !== 1 ? "s" : ""} imported successfully`
+          );
         }}
       />
+
+      {importToast && (
+        <div className="fixed bottom-5 right-5 z-[60] rounded-[var(--radius-control)] bg-[var(--ink-800)] px-4 py-2.5 text-sm text-white shadow-lg">
+          {importToast}
+        </div>
+      )}
     </main>
   );
 }

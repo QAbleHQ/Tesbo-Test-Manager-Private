@@ -48,7 +48,7 @@ interface Props {
   projectId: string;
   open: boolean;
   onClose: () => void;
-  onImported: () => void;
+  onImported: (result: ImportResult) => void;
 }
 
 export default function ImportTestCasesModal({ projectId, open, onClose, onImported }: Props) {
@@ -292,7 +292,7 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
       const res = { imported, errors, total: activeSheet.totalRows };
       setResult(res);
       setStep("result");
-      if (res.imported > 0) onImported();
+      onImported(res);
     } catch (err) {
       setImportError(err instanceof Error ? err.message : "Import failed");
     } finally {
