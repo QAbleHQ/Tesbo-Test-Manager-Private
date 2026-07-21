@@ -1,19 +1,18 @@
 // Auto-deploy Tesbo Test Manager (Private) on pushes to main.
 //
-// Failure you hit:
-//   ERROR: Could not find credentials entry with ID 'tesbo-deploy-ssh'
-// Fix in Jenkins GUI (one time):
-//   Manage Jenkins → Credentials → Global → Add Credentials
-//   Kind: SSH Username with private key
-//   ID: tesbo-deploy-ssh   (must match exactly, or change param below)
-//   Username: root (or deploy user)
-//   Private Key: key that can SSH to the app server
+ // Architecture:
+//   Jenkins server = testman
+//   App server     = tesbo  (SSH host alias from testman; no droplet IP needed)
 //
-// Also set job env or use Build Parameters:
-//   DEPLOY_HOST = production server IP / hostname
-//   DEPLOY_USER = root
-//
-// Safety: never runs `docker compose down -v` (keeps Postgres data).
+ // Deploy flow: Jenkins SSHes to `tesbo`, pulls main, docker compose up --build -d
+ // Safety: never runs `docker compose down -v` (keeps Postgres data).
+ //
+ // One-time Jenkins credential:
+ //   Manage Jenkins → Credentials → Global → Add Credentials
+ //   Kind: SSH Username with private key
+ //   ID: tesbo-deploy-ssh
+ //   Username: root
+ //   Private Key: the key testman uses for `ssh tesbo`
 
 pipeline {
   agent any
@@ -22,27 +21,27 @@ pipeline {
     choice(
       name: 'DEPLOY_MODE',
       choices: ['ssh', 'local'],
-      description: 'ssh = deploy over SSH to DEPLOY_HOST. local = run docker compose on this Jenkins agent (only if Jenkins runs on the app server).'
+      description: 'ssh = deploy to tesbo over SSH (normal). local = only if app runs on Jenkins/testman itself.'
     )
     string(
       name: 'DEPLOY_HOST',
-      defaultValue: '',
-      description: 'Required for ssh mode. App server IP or hostname (e.g. tesbo or 208.x.x.x).'
+      defaultValue: 'tesbo',
+      description: 'SSH host alias from testman (default: tesbo). Not a droplet IP.'
     )
     string(
       name: 'DEPLOY_USER',
       defaultValue: 'root',
-      description: 'SSH username on the app server.'
+      description: 'SSH username on tesbo.'
     )
     string(
       name: 'DEPLOY_SSH_CREDENTIAL_ID',
       defaultValue: 'tesbo-deploy-ssh',
-      description: 'Jenkins credential ID (SSH Username with private key). Create this in Jenkins if missing.'
+      description: 'Jenkins SSH credential ID used to connect testman → tesbo.'
     )
     string(
       name: 'DEPLOY_PATH',
       defaultValue: '/opt/tesbo-test-manager/Tesbo-Test-Manager',
-      description: 'App directory on the production server.'
+      description: 'App directory on tesbo.'
     )
   }
 
@@ -57,8 +56,11 @@ pipeline {
   }
 
   environment {
-    REPO_URL   = 'https://github.com/QAbleHQ/Tesbo-Test-Manager-Private.git'
-    APP_HEALTH = "${env.APP_HEALTH ?: 'https://app.tesbo.io'}"
+    REPO_URL    = 'https://github.com/QAbleHQ/Tesbo-Test-Manager-Private.git'
+    APP_HEALTH  = "${env.APP_HEALTH ?: 'https://app.tesbo.io'}"
+    DEPLOY_PATH = "${params.DEPLOY_PATH}"
+    DEPLOY_HOST = "${params.DEPLOY_HOST}"
+    DEPLOY_USER = "${params.DEPLOY_USER}"
   }
 
   stages {
@@ -74,7 +76,7 @@ pipeline {
         script {
           env.GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
           echo "Deploying commit ${env.GIT_SHA} from Tesbo-Test-Manager-Private (main)"
-          echo "DEPLOY_MODE=${params.DEPLOY_MODE} HOST=${params.DEPLOY_HOST} CRED=${params.DEPLOY_SSH_CREDENTIAL_ID}"
+          echo "DEPLOY_MODE=${params.DEPLOY_MODE} HOST=${params.DEPLOY_HOST} PATH=${params.DEPLOY_PATH}"
         }
       }
     }
@@ -92,9 +94,9 @@ pipeline {
       steps {
         sh '''
           set -eu
-          REMOTE_PATH="${DEPLOY_PATH}"
-          echo "==> Local deploy at ${REMOTE_PATH}"
-          cd "${REMOTE_PATH}"
+          echo "==> Local deploy at ${DEPLOY_PATH}"
+          test -d "${DEPLOY_PATH}" || { echo "ERROR: ${DEPLOY_PATH} not found on testman. Use DEPLOY_MODE=ssh to deploy on tesbo."; exit 1; }
+          cd "${DEPLOY_PATH}"
 
           git remote set-url origin "${REPO_URL}"
           git fetch origin main
@@ -131,11 +133,6 @@ pipeline {
         }
       }
       steps {
-        script {
-          if (!params.DEPLOY_HOST?.trim()) {
-            error('DEPLOY_HOST is empty. Set it in Build with Parameters (or job defaults) to your app server hostname/IP.')
-          }
-        }
         withCredentials([
           sshUserPrivateKey(
             credentialsId: "${params.DEPLOY_SSH_CREDENTIAL_ID}",
@@ -145,19 +142,19 @@ pipeline {
         ]) {
           sh '''
             set -eu
-
-            HOST="${DEPLOY_HOST}"
             USER_NAME="${DEPLOY_USER:-$SSH_USER}"
-            REMOTE_PATH="${DEPLOY_PATH}"
             SSH_OPTS="-i ${SSH_KEY} -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
 
-            echo "==> Connecting to ${USER_NAME}@${HOST}"
-            echo "==> Deploy path: ${REMOTE_PATH}"
+            echo "==> Connecting to ${USER_NAME}@${DEPLOY_HOST}"
+            echo "==> Deploy path: ${DEPLOY_PATH}"
             echo "==> Commit: ${GIT_SHA}"
 
-            ssh ${SSH_OPTS} "${USER_NAME}@${HOST}" bash -s <<EOF
+            # Quick connectivity check (same path Jenkins will use)
+            ssh ${SSH_OPTS} "${USER_NAME}@${DEPLOY_HOST}" "hostname && pwd"
+
+            ssh ${SSH_OPTS} "${USER_NAME}@${DEPLOY_HOST}" bash -s <<EOF
 set -eu
-cd "${REMOTE_PATH}"
+cd "${DEPLOY_PATH}"
 
 echo "==> Verify / set private repo remote"
 git remote set-url origin "${REPO_URL}"
@@ -175,7 +172,7 @@ if docker compose version >/dev/null 2>&1; then
 elif command -v docker-compose >/dev/null 2>&1; then
   COMPOSE="docker-compose"
 else
-  echo "Docker Compose not found on server" >&2
+  echo "Docker Compose not found on tesbo" >&2
   exit 1
 fi
 
@@ -185,7 +182,7 @@ fi
 sleep 15
 \$COMPOSE ps
 curl -fsS "http://127.0.0.1:1011/health" || curl -fsS "http://127.0.0.1:7000/health" || true
-echo "==> Deploy finished"
+echo "==> Deploy finished on tesbo"
 EOF
           '''
         }
@@ -218,11 +215,10 @@ EOF
     failure {
       echo """
 Deploy failed.
-If error is missing credentials:
-  1) Jenkins → Manage Jenkins → Credentials → Global → Add Credentials
-  2) Kind: SSH Username with private key
-  3) ID must be exactly: tesbo-deploy-ssh  (or match DEPLOY_SSH_CREDENTIAL_ID)
-  4) Also set DEPLOY_HOST in Build with Parameters
+Setup checklist on testman Jenkins:
+  1) Credential ID tesbo-deploy-ssh (SSH key that can: ssh root@tesbo)
+  2) Build params: DEPLOY_MODE=ssh, DEPLOY_HOST=tesbo
+  3) On testman shell, verify: ssh root@tesbo hostname
 """
     }
   }
