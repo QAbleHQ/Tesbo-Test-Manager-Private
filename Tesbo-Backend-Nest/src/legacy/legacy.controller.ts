@@ -510,7 +510,9 @@ export class LegacyController {
     if ("redirectUrl" in access) return res.redirect(302, access.redirectUrl);
     res.setHeader("Content-Type", access.mimeType);
     res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(access.originalFileName)}"`);
-    res.sendFile(access.localPath);
+    if ("buffer" in access && access.buffer) return res.send(access.buffer);
+    if ("localPath" in access && access.localPath) return res.sendFile(access.localPath);
+    throw new Error("Attachment content unavailable");
   }
 
   @Delete("/api/bugs/attachments/:attachmentId")
@@ -917,7 +919,9 @@ export class LegacyController {
     if ("redirectUrl" in access) return res.redirect(302, access.redirectUrl);
     res.setHeader("Content-Type", access.mimeType);
     res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(access.originalFileName)}"`);
-    res.sendFile(access.localPath);
+    if ("buffer" in access && access.buffer) return res.send(access.buffer);
+    if ("localPath" in access && access.localPath) return res.sendFile(access.localPath);
+    throw new Error("Knowledge file content unavailable");
   }
 
   @Get("/api/projects/:projectId/knowledge-base/files/:fileId/preview")
