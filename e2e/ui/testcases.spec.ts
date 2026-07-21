@@ -11,9 +11,10 @@ test.describe("test case creation", () => {
     const title = `UI smoke test case ${Date.now()}`;
 
     await page.goto(`/projects/${ctx.projectId}/testcases`);
-    // Both the toolbar and the empty-state block render a "+ Add test case" button when the
-    // project has no test cases yet; either one opens the same create panel.
-    await page.getByRole("button", { name: "+ Add test case" }).first().click();
+    // Both the toolbar and the empty-state block render an "Add test case" button (an IconPlus
+    // glyph, not a literal "+" in the accessible name) when the project has no test cases yet;
+    // either one opens the same create panel.
+    await page.getByRole("button", { name: "Add test case" }).first().click();
 
     const panel = page.locator("aside");
     await panel.getByPlaceholder("Describe what this test case validates").fill(title);

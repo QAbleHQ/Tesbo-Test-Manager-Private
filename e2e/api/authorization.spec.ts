@@ -1,0 +1,402 @@
+import fs from "node:fs";
+import path from "node:path";
+import { expect, request, test, type APIRequestContext } from "@playwright/test";
+import { env } from "../utils/env";
+
+// Cross-tenant IDOR regression suite. Every test below calls test.fail() first, asserting the
+// SECURE behavior (403/404) — they fail today because legacy.service.ts's requireProjectAccess()
+// tenant-scoping check isn't wired up for these resource types (see
+// docs/FEATURE_DOCUMENTATION.md Appendix A). The moment a check is added, Playwright reports the
+// case as "unexpectedly passing" instead of a normal failure — that's the cue to remove the
+// test.fail() call, not a maintenance bug.
+//
+// Cleanup always runs in a `finally` block: since the assertions below are EXPECTED to fail
+// (that's the entire premise of test.fail()), an `expect()` throws mid-test today, and any
+// cleanup written after it — outside a `finally` — would never execute, silently leaking
+// fixtures (and in the project-members case, real cross-tenant access) into the shared smoke
+// project on every run.
+//
+// `request` (the default fixture) is account A, logged in via playwright.config.ts's default
+// storageState. `asB` is a second, fully independent account/org/project (see global-setup.ts).
+
+const ctxA = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
+const ctxB = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context-b.json"), "utf-8"));
+
+let asB: APIRequestContext;
+let anon: APIRequestContext;
+
+test.beforeAll(async () => {
+  asB = await request.newContext({
+    baseURL: env.apiBaseUrl,
+    storageState: path.join(__dirname, "../.auth/state-b.json"),
+  });
+  // Playwright's request fixture otherwise inherits the project's default storageState (account
+  // A's session) — clear it explicitly to get a truly anonymous, no-cookie context.
+  anon = await request.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+});
+
+test.afterAll(async () => {
+  await asB.dispose();
+  await anon.dispose();
+});
+
+test.describe("test suites", () => {
+  test("a different account can rename and delete another project's suite by ID", async ({ request }) => {
+    test.fail();
+    // KNOWN GAP: updateSuite/deleteSuite (legacy.service.ts:1357,1362) take no userId at all —
+    // not even a session is required, let alone project membership.
+    const created = await (
+      await request.post(`/api/projects/${ctxA.projectId}/suites`, {
+        data: { name: `E2E IDOR Suite ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      const renameRes = await asB.patch(`/api/suites/${created.id}`, {
+        data: { name: "Renamed by account B" },
+        failOnStatusCode: false,
+      });
+      expect(renameRes.status()).toBe(403);
+
+      const deleteRes = await asB.delete(`/api/suites/${created.id}`, { failOnStatusCode: false });
+      expect(deleteRes.status()).toBe(403);
+    } finally {
+      // deleteSuite() has no existence check, so a second delete of an already-gone suite is a
+      // harmless no-op — this always runs, whether or not account B's delete above succeeded.
+      await request.delete(`/api/suites/${created.id}`, { failOnStatusCode: false });
+    }
+  });
+});
+
+test.describe("test cases", () => {
+  test("a different account can read, update, and delete another project's test case by ID", async ({
+    request,
+  }) => {
+    test.fail();
+    // KNOWN GAP: getTestCase has no auth at all; updateTestCase/deleteTestCase only call
+    // requireUser (any valid session), never checking the case's project against the caller.
+    const created = await (
+      await request.post(`/api/projects/${ctxA.projectId}/testcases`, {
+        data: { title: `E2E IDOR Test Case ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      const getRes = await asB.get(`/api/projects/${ctxB.projectId}/testcases/${created.id}`, {
+        failOnStatusCode: false,
+      });
+      expect(getRes.status()).toBe(403);
+
+      const updateRes = await asB.put(`/api/projects/${ctxB.projectId}/testcases/${created.id}`, {
+        data: { title: "Retitled by account B" },
+        failOnStatusCode: false,
+      });
+      expect(updateRes.status()).toBe(403);
+
+      const deleteRes = await asB.delete(`/api/projects/${ctxB.projectId}/testcases/${created.id}`, {
+        failOnStatusCode: false,
+      });
+      expect(deleteRes.status()).toBe(403);
+    } finally {
+      await request.delete(`/api/projects/${ctxA.projectId}/testcases/${created.id}`, {
+        failOnStatusCode: false,
+      });
+    }
+  });
+});
+
+test.describe("test plans", () => {
+  test("a different account can read, update, and delete another project's test plan by ID", async ({
+    request,
+  }) => {
+    test.fail();
+    // KNOWN GAP: getPlan/updatePlan/deletePlan (legacy.service.ts:1658-1673) take no userId
+    // at all — reachable with no session and no project-membership check.
+    const created = await (
+      await request.post(`/api/projects/${ctxA.projectId}/plans`, {
+        data: { name: `E2E IDOR Plan ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      const getRes = await asB.get(`/api/plans/${created.id}`, { failOnStatusCode: false });
+      expect(getRes.status()).toBe(403);
+
+      const updateRes = await asB.patch(`/api/plans/${created.id}`, {
+        data: { name: "Renamed by account B" },
+        failOnStatusCode: false,
+      });
+      expect(updateRes.status()).toBe(403);
+
+      const deleteRes = await asB.delete(`/api/plans/${created.id}`, { failOnStatusCode: false });
+      expect(deleteRes.status()).toBe(403);
+    } finally {
+      await request.delete(`/api/plans/${created.id}`, { failOnStatusCode: false });
+    }
+  });
+});
+
+test.describe("test cycles / runs", () => {
+  test("a different account can read, update, and delete another project's test cycle by ID", async ({
+    request,
+  }) => {
+    test.fail();
+    // KNOWN GAP: getCycle/updateCycle/deleteCycle (legacy.service.ts:1729-1789) take no userId
+    // at all — same shape of gap as test plans.
+    const created = await (
+      await request.post(`/api/projects/${ctxA.projectId}/cycles`, {
+        data: { name: `E2E IDOR Cycle ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      const getRes = await asB.get(`/api/cycles/${created.id}`, { failOnStatusCode: false });
+      expect(getRes.status()).toBe(403);
+
+      const updateRes = await asB.patch(`/api/cycles/${created.id}`, {
+        data: { name: "Renamed by account B" },
+        failOnStatusCode: false,
+      });
+      expect(updateRes.status()).toBe(403);
+
+      const deleteRes = await asB.delete(`/api/cycles/${created.id}`, { failOnStatusCode: false });
+      expect(deleteRes.status()).toBe(403);
+    } finally {
+      await request.delete(`/api/cycles/${created.id}`, { failOnStatusCode: false });
+    }
+  });
+});
+
+test.describe("test executions", () => {
+  test("a different account can update another project's test execution by ID", async ({ request }) => {
+    test.fail();
+    // KNOWN GAP: updateExecution (legacy.service.ts:1822) calls requireUser (any valid
+    // session) but never checks the execution's cycle/project against the caller.
+    const cycle = await (
+      await request.post(`/api/projects/${ctxA.projectId}/cycles`, {
+        data: { name: `E2E IDOR Execution Cycle ${Date.now()}` },
+      })
+    ).json();
+    const testcase = await (
+      await request.post(`/api/projects/${ctxA.projectId}/testcases`, {
+        data: { title: `E2E IDOR Execution Test Case ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      await request.post(`/api/cycles/${cycle.id}/testcases`, {
+        data: { testcaseIds: [testcase.id] },
+      });
+      const executions = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
+      const execution = executions[0];
+
+      const updateRes = await asB.patch(`/api/cycles/${cycle.id}/executions/${execution.id}`, {
+        data: { status: "Failed", actualResult: "Overwritten by account B" },
+        failOnStatusCode: false,
+      });
+      expect(updateRes.status()).toBe(403);
+    } finally {
+      await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+      await request.delete(`/api/projects/${ctxA.projectId}/testcases/${testcase.id}`, {
+        failOnStatusCode: false,
+      });
+    }
+  });
+});
+
+test.describe("bugs", () => {
+  test("a different account can read, update, and delete another project's bug by ID", async ({ request }) => {
+    test.fail();
+    // KNOWN GAP: getBug/updateBug/deleteBug (legacy.service.ts:2044-2096) don't even call
+    // requireUser — no session and no project-membership check.
+    const created = await (
+      await request.post(`/api/projects/${ctxA.projectId}/bugs`, {
+        data: { title: `E2E IDOR Bug ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      const getRes = await asB.get(`/api/bugs/${created.id}`, { failOnStatusCode: false });
+      expect(getRes.status()).toBe(403);
+
+      const updateRes = await asB.patch(`/api/bugs/${created.id}`, {
+        data: { title: "Retitled by account B" },
+        failOnStatusCode: false,
+      });
+      expect(updateRes.status()).toBe(403);
+
+      const deleteRes = await asB.delete(`/api/bugs/${created.id}`, { failOnStatusCode: false });
+      expect(deleteRes.status()).toBe(403);
+    } finally {
+      await request.delete(`/api/bugs/${created.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("a completely unauthenticated request (no session at all) can read another project's bug", async ({
+    request,
+  }) => {
+    test.fail();
+    // Worse than the cross-tenant case above: these routes don't require ANY session, so an
+    // anonymous caller with no account at all can read/write bugs purely by guessing a UUID.
+    const created = await (
+      await request.post(`/api/projects/${ctxA.projectId}/bugs`, {
+        data: { title: `E2E IDOR Anon Bug ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      const getRes = await anon.get(`/api/bugs/${created.id}`, { failOnStatusCode: false });
+      expect(getRes.status()).toBe(401);
+    } finally {
+      await request.delete(`/api/bugs/${created.id}`, { failOnStatusCode: false });
+    }
+  });
+});
+
+test.describe("public share links", () => {
+  test("a different account can toggle public sharing on another project's cycle", async ({ request }) => {
+    test.fail();
+    // KNOWN GAP: shareCycle (legacy.service.ts:1735) takes no userId at all.
+    const cycle = await (
+      await request.post(`/api/projects/${ctxA.projectId}/cycles`, {
+        data: { name: `E2E IDOR Share Cycle ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      const shareRes = await asB.post(`/api/cycles/${cycle.id}/share`, {
+        data: { enabled: true },
+        failOnStatusCode: false,
+      });
+      expect(shareRes.status()).toBe(403);
+    } finally {
+      await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("the public share executions endpoint exposes internal fields the share page never displays", async ({
+    request,
+  }) => {
+    test.fail();
+    // KNOWN GAP: publicCycleExecutions (legacy.service.ts:1756) reuses the same internal
+    // executions() query as the authenticated route — full row data, not the 5 columns
+    // /share/:token actually renders (externalId/title/priority/type/status).
+    const cycle = await (
+      await request.post(`/api/projects/${ctxA.projectId}/cycles`, {
+        data: { name: `E2E IDOR Public Exposure Cycle ${Date.now()}` },
+      })
+    ).json();
+    const testcase = await (
+      await request.post(`/api/projects/${ctxA.projectId}/testcases`, {
+        data: { title: `E2E IDOR Public Exposure Test Case ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
+      const executions = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
+      await request.patch(`/api/cycles/${cycle.id}/executions/${executions[0].id}`, {
+        data: { status: "Failed", actualResult: "Sensitive actual-result text" },
+      });
+      const share = await (
+        await request.post(`/api/cycles/${cycle.id}/share`, { data: { enabled: true } })
+      ).json();
+
+      const publicRes = await anon.get(`/api/public/shared-runs/${share.shareToken}/executions`);
+      const publicExecutions = await publicRes.json();
+
+      const exposedFields = Object.keys(publicExecutions[0] ?? {});
+      for (const sensitiveField of ["actualResult", "assigneeId", "steps", "preconditions", "testData"]) {
+        expect(exposedFields).not.toContain(sensitiveField);
+      }
+    } finally {
+      await request.delete(`/api/cycles/${cycle.id}`, { failOnStatusCode: false });
+      await request.delete(`/api/projects/${ctxA.projectId}/testcases/${testcase.id}`, {
+        failOnStatusCode: false,
+      });
+    }
+  });
+});
+
+test.describe("requirements / traceability", () => {
+  test("a different account can read another project's requirement matrix and ticket summary", async ({
+    request,
+  }) => {
+    test.fail();
+    // KNOWN GAP: requirementMatrix/requirementsSummary (legacy.service.ts:2276,5054) take a
+    // projectId with no check that the caller belongs to it. Read-only — no fixture to clean up.
+    const matrixRes = await asB.get(`/api/projects/${ctxA.projectId}/reports/requirement-matrix`, {
+      failOnStatusCode: false,
+    });
+    expect(matrixRes.status()).toBe(403);
+
+    const summaryRes = await asB.get(`/api/projects/${ctxA.projectId}/tickets/summary`, {
+      failOnStatusCode: false,
+    });
+    expect(summaryRes.status()).toBe(403);
+  });
+});
+
+test.describe("knowledge base v1 (legacy)", () => {
+  test("a different account can read, update, and delete another project's legacy knowledge base item", async ({
+    request,
+  }) => {
+    test.fail();
+    // KNOWN GAP: getKnowledge/updateKnowledge/deleteKnowledge (legacy.service.ts:2961-2978)
+    // take no project/userId context at all — superseded by KB v2, which does check.
+    const created = await (
+      await request.post(`/api/projects/${ctxA.projectId}/knowledge-base`, {
+        data: { title: `E2E IDOR Knowledge Item ${Date.now()}` },
+      })
+    ).json();
+
+    try {
+      const getRes = await asB.get(`/api/projects/${ctxB.projectId}/knowledge-base/${created.id}`, {
+        failOnStatusCode: false,
+      });
+      expect(getRes.status()).toBe(403);
+
+      const updateRes = await asB.patch(`/api/projects/${ctxB.projectId}/knowledge-base/${created.id}`, {
+        data: { title: "Retitled by account B" },
+        failOnStatusCode: false,
+      });
+      expect(updateRes.status()).toBe(403);
+
+      const deleteRes = await asB.delete(`/api/projects/${ctxB.projectId}/knowledge-base/${created.id}`, {
+        failOnStatusCode: false,
+      });
+      expect(deleteRes.status()).toBe(403);
+    } finally {
+      await request.delete(`/api/projects/${ctxA.projectId}/knowledge-base/${created.id}`, {
+        failOnStatusCode: false,
+      });
+    }
+  });
+});
+
+test.describe("project members", () => {
+  test("a caller can add themselves as owner of another project with no permission check", async ({
+    request,
+  }) => {
+    test.fail();
+    // KNOWN GAP, worse than the rest: addProjectMember's controller method
+    // (legacy.controller.ts:211) doesn't even take @Req() — it never looks at the caller's
+    // identity, so this isn't even gated behind having a valid login session. Cleanup here
+    // matters more than anywhere else in this file: an un-cleaned failure leaves account B with
+    // real, persistent "owner" access to account A's project, not just a stray fixture row.
+    const meRes = await asB.get("/api/auth/me");
+    const me = await meRes.json();
+
+    try {
+      const addRes = await asB.post(`/api/projects/${ctxA.projectId}/members`, {
+        data: { userId: me.userId, role: "owner" },
+        failOnStatusCode: false,
+      });
+      expect(addRes.status()).toBe(403);
+    } finally {
+      await request.delete(`/api/projects/${ctxA.projectId}/members/${me.userId}`, {
+        failOnStatusCode: false,
+      });
+    }
+  });
+});

@@ -367,11 +367,21 @@ export class LegacyService implements OnModuleInit {
     return uid;
   }
 
-  private async logProjectActivity(projectId: string, actorId: string | null, action: string, entityType: string, entityId: string | null, entityName: string | null, diff: Body) {
+  async logProjectActivity(projectId: string, actorId: string | null, action: string, entityType: string, entityId: string | null, entityName: string | null, diff: Body) {
     await this.db.query(
-      `INSERT INTO audit_logs (project_id, actor_id, action, entity_type, entity_id, entity_name, diff)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      `INSERT INTO audit_logs (project_id, actor_id, action, entity_type, entity_id, entity_name, diff, organization_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb, (SELECT organization_id FROM projects WHERE id = $1))`,
       [projectId, actorId, action, entityType, entityId, entityName, JSON.stringify(diff)]
+    ).catch(() => undefined);
+  }
+
+  // Sibling to logProjectActivity for pure workspace-level events with no project
+  // context (membership/invite lifecycle) — project_id stays NULL.
+  async logWorkspaceActivity(organizationId: string, actorId: string | null, action: string, entityType: string, entityId: string | null, entityName: string | null, diff: Body) {
+    await this.db.query(
+      `INSERT INTO audit_logs (organization_id, actor_id, action, entity_type, entity_id, entity_name, diff)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      [organizationId, actorId, action, entityType, entityId, entityName, JSON.stringify(diff)]
     ).catch(() => undefined);
   }
 
@@ -593,6 +603,21 @@ export class LegacyService implements OnModuleInit {
     return this.workspace(uid);
   }
 
+  async updateWorkspace(userId: string | null | undefined, body: Body) {
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
+    const callerRole = this.normalizeRole(workspace.role);
+    if (callerRole === "qa_engineer")
+      throw new ForbiddenException({ error: "Only workspace owners and managers can rename the workspace" });
+
+    const name = String(body.name || "").trim();
+    if (!name) throw new BadRequestException({ error: "name is required" });
+    if (name.length > 255) throw new BadRequestException({ error: "name must be 255 characters or fewer" });
+
+    await this.db.query("UPDATE organizations SET name = $1, updated_at = now() WHERE id = $2", [name, workspace.id]);
+    return this.workspace(uid);
+  }
+
   async workspaceMembers(userId: string | null | undefined) {
     const workspace = await this.workspace(userId);
     const res = await this.db.query(
@@ -605,16 +630,18 @@ export class LegacyService implements OnModuleInit {
   }
 
   async addWorkspaceMember(userId: string | null | undefined, body: Body) {
-    const workspace = await this.workspace(userId);
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
     const email = String(body.email || "").trim().toLowerCase();
     const target = String(body.userId || "").trim();
     const role = String(body.role || "member");
     if (!email && !target) throw new BadRequestException({ error: "email or userId is required" });
-    const uid = target || (await this.upsertUser(email));
+    const targetUserId = target || (await this.upsertUser(email));
     await this.db.query(
       "INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (organization_id, user_id) DO UPDATE SET role = EXCLUDED.role",
-      [workspace.id, uid, role]
+      [workspace.id, targetUserId, role]
     );
+    await this.logWorkspaceActivity(workspace.id, uid, "workspace_member_added", "workspace_member", targetUserId, email || targetUserId, { role });
   }
 
   async removeWorkspaceMember(userId: string | null | undefined, targetUserId: string) {
@@ -622,8 +649,9 @@ export class LegacyService implements OnModuleInit {
     const workspace = await this.workspace(uid);
     if (uid === targetUserId) throw new BadRequestException({ error: "You cannot remove yourself" });
     // Protect the last owner
-    const targetMember = await this.db.query<{ role: string }>(
-      "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2",
+    const targetMember = await this.db.query<{ role: string; email: string }>(
+      `SELECT om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id
+       WHERE om.organization_id = $1 AND om.user_id = $2`,
       [workspace.id, targetUserId]
     );
     if (!targetMember.rows[0]) throw new NotFoundException({ error: "Member not found" });
@@ -639,6 +667,7 @@ export class LegacyService implements OnModuleInit {
     const callerRole = this.normalizeRole(workspace.role);
     if (callerRole !== "owner") throw new ForbiddenException({ error: "Only the owner can remove team members" });
     await this.db.query("DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2", [workspace.id, targetUserId]);
+    await this.logWorkspaceActivity(workspace.id, uid, "workspace_member_removed", "workspace_member", targetUserId, targetMember.rows[0].email, { role: targetMember.rows[0].role });
   }
 
   // ─── Role helpers ────────────────────────────────────────────────────────────
@@ -751,6 +780,8 @@ export class LegacyService implements OnModuleInit {
 
     await this.email.sendInvite(email, inviterName, role, workspace.name, rawToken, projectNames, this.config.frontendUrl);
 
+    await this.logWorkspaceActivity(workspace.id, uid, "invitation_sent", "invitation", result.rows[0].id, email, { role, projectIds });
+
     return toCamel(result.rows[0]);
   }
 
@@ -788,8 +819,8 @@ export class LegacyService implements OnModuleInit {
     const uid = this.requireUser(userId);
     const workspace = await this.workspace(uid);
     const callerRole = this.normalizeRole(workspace.role);
-    const invite = await this.db.query<{ id: string; status: string; invited_by: string | null }>(
-      "SELECT id, status, invited_by FROM invitations WHERE id = $1 AND organization_id = $2",
+    const invite = await this.db.query<{ id: string; status: string; invited_by: string | null; email: string }>(
+      "SELECT id, status, invited_by, email FROM invitations WHERE id = $1 AND organization_id = $2",
       [inviteId, workspace.id]
     );
     if (!invite.rows[0]) throw new NotFoundException({ error: "Invitation not found" });
@@ -800,6 +831,7 @@ export class LegacyService implements OnModuleInit {
       "UPDATE invitations SET status = 'cancelled', cancelled_at = now(), updated_at = now() WHERE id = $1",
       [inviteId]
     );
+    await this.logWorkspaceActivity(workspace.id, uid, "invitation_cancelled", "invitation", inviteId, invite.rows[0].email, {});
   }
 
   async resendInvitation(userId: string | null | undefined, inviteId: string) {
@@ -849,6 +881,7 @@ export class LegacyService implements OnModuleInit {
       projectNames,
       this.config.frontendUrl
     );
+    await this.logWorkspaceActivity(workspace.id, uid, "invitation_resent", "invitation", inviteId, invite.rows[0].email, {});
     return { resent: true };
   }
 
@@ -941,6 +974,11 @@ export class LegacyService implements OnModuleInit {
       ]);
     });
 
+    await this.logWorkspaceActivity(inv.organization_id, uid, "invitation_accepted", "invitation", inv.id, inv.email, { role: inv.role });
+    for (const projectId of inv.project_ids ?? []) {
+      await this.logProjectActivity(projectId, uid, "project_member_added", "project_member", uid, inv.email, { role: inv.role, via: "invitation_accepted" });
+    }
+
     return { accepted: true, organizationId: inv.organization_id };
   }
 
@@ -987,6 +1025,11 @@ export class LegacyService implements OnModuleInit {
       return uid;
     });
 
+    await this.logWorkspaceActivity(inv.organization_id, newUser, "invitation_accepted", "invitation", inv.id, inv.email, { role: inv.role, viaRegistration: true });
+    for (const projectId of inv.project_ids ?? []) {
+      await this.logProjectActivity(projectId, newUser, "project_member_added", "project_member", newUser, inv.email, { role: inv.role, via: "invitation_registered" });
+    }
+
     return { userId: newUser, organizationId: inv.organization_id };
   }
 
@@ -997,8 +1040,9 @@ export class LegacyService implements OnModuleInit {
     if (callerRole !== "owner") throw new ForbiddenException({ error: "Only the owner can change roles" });
     if (uid === targetUserId) throw new BadRequestException({ error: "You cannot change your own role" });
 
-    const target = await this.db.query<{ role: string }>(
-      "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2",
+    const target = await this.db.query<{ role: string; email: string }>(
+      `SELECT om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id
+       WHERE om.organization_id = $1 AND om.user_id = $2`,
       [workspace.id, targetUserId]
     );
     if (!target.rows[0]) throw new NotFoundException({ error: "Member not found" });
@@ -1012,6 +1056,7 @@ export class LegacyService implements OnModuleInit {
       "UPDATE organization_members SET role = $1 WHERE organization_id = $2 AND user_id = $3",
       [normalized, workspace.id, targetUserId]
     );
+    await this.logWorkspaceActivity(workspace.id, uid, "workspace_member_role_changed", "workspace_member", targetUserId, target.rows[0].email, { from: targetRole, to: normalized });
   }
 
   async aiKeys(userId: string | null | undefined) {
@@ -1140,6 +1185,7 @@ export class LegacyService implements OnModuleInit {
       await this.seedKnowledgeBaseDefaults(client, workspace.id, project.rows[0].id);
       return project.rows[0];
     });
+    await this.logProjectActivity(res.id, uid, "project_created", "project", res.id, res.name, {});
     return toCamel(res);
   }
 
@@ -1160,11 +1206,14 @@ export class LegacyService implements OnModuleInit {
   // Confirms the caller is a member of this project AND that the project belongs to
   // their currently active workspace, so switching workspaces fully isolates data —
   // a project from another org is invisible/inaccessible until you switch into it.
+  // Also surfaces the caller's own project role (caller_role) since the join is
+  // already scoped to pm.user_id = the caller — callers that need to permission-check
+  // an action (e.g. addProjectMember) can reuse this instead of a second query.
   private async requireProjectAccess(userId: string | null | undefined, projectId: string) {
     const uid = this.requireUser(userId);
     const workspace = await this.workspace(uid);
     const res = await this.db.query(
-      `SELECT p.* FROM projects p
+      `SELECT p.*, pm.role AS caller_role FROM projects p
        JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $2
        WHERE p.id = $1 AND p.archived_at IS NULL AND p.organization_id = $3`,
       [projectId, uid, workspace.id]
@@ -1199,11 +1248,15 @@ export class LegacyService implements OnModuleInit {
   }
 
   async deleteProjectForUser(userId: string | null | undefined, id: string) {
-    await this.requireProjectAccess(userId, id);
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, id);
     await this.deleteProject(id);
+    await this.logProjectActivity(id, uid, "project_archived", "project", id, project.name, {});
   }
 
-  async projectMembers(projectId: string) {
+  // Read-only: any project member (any role) may list the roster.
+  async projectMembers(userId: string | null | undefined, projectId: string) {
+    await this.requireProjectAccess(userId, projectId);
     const res = await this.db.query(
       `SELECT u.id AS user_id, u.email, COALESCE(u.name, '') AS name, pm.role, pm.created_at AS joined_at
        FROM project_members pm JOIN users u ON u.id = pm.user_id
@@ -1213,16 +1266,71 @@ export class LegacyService implements OnModuleInit {
     return res.rows.map(toCamel);
   }
 
-  async addProjectMember(projectId: string, body: Body) {
-    if (!body.userId) throw new BadRequestException({ error: "userId is required" });
+  async addProjectMember(userId: string | null | undefined, projectId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    const callerRole = this.normalizeRole(project.caller_role);
+    if (callerRole === "qa_engineer") throw new ForbiddenException({ error: "QA Engineers cannot manage project members" });
+
+    const targetUserId = String(body.userId || "");
+    if (!targetUserId) throw new BadRequestException({ error: "userId is required" });
+    const requestedRole = this.normalizeRole(String(body.role || "qa_engineer"));
+    if (requestedRole === "owner") throw new ForbiddenException({ error: "Cannot assign the owner role" });
+    if (callerRole === "manager" && requestedRole !== "qa_engineer")
+      throw new ForbiddenException({ error: "Managers can only assign the QA Engineer role" });
+
+    const target = await this.db.query<{ email: string; role: string | null }>(
+      `SELECT u.email, pm.role
+       FROM users u LEFT JOIN project_members pm ON pm.project_id = $1 AND pm.user_id = u.id
+       WHERE u.id = $2`,
+      [projectId, targetUserId]
+    );
+    if (!target.rows[0]) throw new NotFoundException({ error: "User not found" });
+    const existingRole = target.rows[0].role ? this.normalizeRole(target.rows[0].role) : null;
+    if (existingRole === "owner") throw new ForbiddenException({ error: "The project owner's role cannot be changed" });
+    if (existingRole && targetUserId === uid) throw new BadRequestException({ error: "You cannot change your own role" });
+    if (existingRole && callerRole === "manager" && existingRole === "manager")
+      throw new ForbiddenException({ error: "Managers cannot change another manager's role" });
+
     await this.db.query(
       "INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role",
-      [projectId, body.userId, body.role || "member"]
+      [projectId, targetUserId, requestedRole]
+    );
+    await this.logProjectActivity(
+      projectId,
+      uid,
+      existingRole ? "project_member_role_changed" : "project_member_added",
+      "project_member",
+      targetUserId,
+      target.rows[0].email,
+      existingRole ? { from: existingRole, to: requestedRole } : { role: requestedRole }
     );
   }
 
-  async removeProjectMember(projectId: string, userId: string) {
-    await this.db.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, userId]);
+  async removeProjectMember(userId: string | null | undefined, projectId: string, targetUserId: string) {
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    const callerRole = this.normalizeRole(project.caller_role);
+    if (callerRole === "qa_engineer") throw new ForbiddenException({ error: "QA Engineers cannot manage project members" });
+    if (targetUserId === uid) throw new BadRequestException({ error: "You cannot remove yourself from the project" });
+
+    const target = await this.db.query<{ email: string; role: string }>(
+      `SELECT u.email, pm.role FROM project_members pm JOIN users u ON u.id = pm.user_id
+       WHERE pm.project_id = $1 AND pm.user_id = $2`,
+      [projectId, targetUserId]
+    );
+    if (!target.rows[0]) throw new NotFoundException({ error: "Member not found" });
+    const targetRole = this.normalizeRole(target.rows[0].role);
+    if (targetRole === "owner") {
+      const ownerCount = await this.db.query<{ count: string }>(
+        "SELECT COUNT(*) AS count FROM project_members WHERE project_id = $1 AND role = 'owner'",
+        [projectId]
+      );
+      if (Number(ownerCount.rows[0].count) <= 1) throw new BadRequestException({ error: "Cannot remove the last project owner" });
+    }
+
+    await this.db.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, targetUserId]);
+    await this.logProjectActivity(projectId, uid, "project_member_removed", "project_member", targetUserId, target.rows[0].email, { role: targetRole });
   }
 
   async listSuites(projectId: string) {
@@ -2581,6 +2689,16 @@ export class LegacyService implements OnModuleInit {
     };
   }
 
+  async listActivityForUser(userId: string | null | undefined, projectId: string, query: Body) {
+    await this.requireProjectAccess(userId, projectId);
+    return this.listActivity(projectId, query);
+  }
+
+  async activitySummaryForUser(userId: string | null | undefined, projectId: string) {
+    await this.requireProjectAccess(userId, projectId);
+    return this.activitySummary(projectId);
+  }
+
   async listActivity(projectId: string, query: Body) {
     const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100);
     const offset = Math.max(Number(query.offset || 0), 0);
@@ -2627,7 +2745,31 @@ export class LegacyService implements OnModuleInit {
   // testcase_deleted (with real actor attribution) on every mutation, so a timestamp-derived
   // row here would double-count them. Suites/plans/cycles/bugs have no equivalent audit trail,
   // so those still derive synthetic created/updated rows from the base tables.
-  private activityEventsSql(outerWhere: string): string {
+  //
+  // projectScopeSql parameterizes the "which project(s)" predicate: the default (single
+  // project, used by listActivity/activitySummary) is `project_id = $1`; the workspace-wide
+  // rollup (listWorkspaceActivity/workspaceActivitySummary) passes an org-derived subquery
+  // instead. It's always one of these two hardcoded literals, never caller/request input.
+  //
+  // orgOnlySql, when set, adds a second audit_logs branch for pure workspace-level events
+  // that have no project_id at all (logWorkspaceActivity rows: invites, workspace membership
+  // changes) — these can never match projectScopeSql since project_id IS NULL, so the
+  // workspace rollup needs this extra branch to include them; the per-project feed omits it
+  // (default null) since those events aren't relevant to a single project's own history.
+  private activityEventsSql(outerWhere: string, projectScopeSql: string = "project_id = $1", orgOnlySql: string | null = null): string {
+    const orgOnlyBranch = orgOnlySql
+      ? `
+        UNION ALL
+        SELECT
+          NULL::uuid AS project_id, a.id::text, a.actor_id, u.email, COALESCE(u.name, g.display_name),
+          CASE WHEN g.id IS NOT NULL THEN 'agent' WHEN u.id IS NOT NULL THEN 'user' END,
+          a.action::text, a.entity_type::text, a.entity_id::text, a.entity_name::text, a.diff::text, a.created_at
+        FROM audit_logs a
+        LEFT JOIN users u ON u.id = a.actor_id
+        LEFT JOIN agents g ON g.id = a.actor_id
+        WHERE a.project_id IS NULL AND ${orgOnlySql}
+      `
+      : "";
     return `
       WITH activity_events AS (
         SELECT
@@ -2644,14 +2786,14 @@ export class LegacyService implements OnModuleInit {
           NULL::text AS diff,
           created_at
         FROM suites
-        WHERE project_id = $1
+        WHERE ${projectScopeSql}
 
         UNION ALL
         SELECT
           project_id, ('suite-updated-' || id::text), NULL::uuid, NULL::text, NULL::text, NULL::text,
           'updated'::text, 'suite'::text, id::text, name, NULL::text, updated_at
         FROM suites
-        WHERE project_id = $1 AND updated_at > created_at + interval '1 second'
+        WHERE ${projectScopeSql} AND updated_at > created_at + interval '1 second'
 
         UNION ALL
         SELECT
@@ -2660,14 +2802,14 @@ export class LegacyService implements OnModuleInit {
           'created'::text, 'plan'::text, p.id::text, p.name, NULL::text, p.created_at
         FROM plans p
         LEFT JOIN users u ON u.id = p.owner_id
-        WHERE p.project_id = $1
+        WHERE ${projectScopeSql}
 
         UNION ALL
         SELECT
           project_id, ('plan-updated-' || id::text), NULL::uuid, NULL::text, NULL::text, NULL::text,
           'updated'::text, 'plan'::text, id::text, name, NULL::text, updated_at
         FROM plans
-        WHERE project_id = $1 AND updated_at > created_at + interval '1 second'
+        WHERE ${projectScopeSql} AND updated_at > created_at + interval '1 second'
 
         UNION ALL
         SELECT
@@ -2676,14 +2818,14 @@ export class LegacyService implements OnModuleInit {
           'created'::text, 'cycle'::text, c.id::text, c.name, NULL::text, c.created_at
         FROM cycles c
         LEFT JOIN users u ON u.id = c.owner_id
-        WHERE c.project_id = $1
+        WHERE ${projectScopeSql}
 
         UNION ALL
         SELECT
           project_id, ('cycle-updated-' || id::text), NULL::uuid, NULL::text, NULL::text, NULL::text,
           'updated'::text, 'cycle'::text, id::text, name, NULL::text, updated_at
         FROM cycles
-        WHERE project_id = $1 AND updated_at > created_at + interval '1 second'
+        WHERE ${projectScopeSql} AND updated_at > created_at + interval '1 second'
 
         UNION ALL
         SELECT
@@ -2692,7 +2834,7 @@ export class LegacyService implements OnModuleInit {
           'created'::text, 'bug'::text, b.id::text, b.title, NULL::text, b.created_at
         FROM bugs b
         LEFT JOIN users u ON u.id = b.reported_by
-        WHERE b.project_id = $1
+        WHERE ${projectScopeSql}
 
         UNION ALL
         SELECT
@@ -2701,7 +2843,7 @@ export class LegacyService implements OnModuleInit {
           'updated'::text, 'bug'::text, b.id::text, b.title, NULL::text, b.updated_at
         FROM bugs b
         LEFT JOIN users u ON u.id = b.reported_by
-        WHERE b.project_id = $1 AND b.updated_at > b.created_at + interval '1 second'
+        WHERE ${projectScopeSql} AND b.updated_at > b.created_at + interval '1 second'
 
         UNION ALL
         SELECT
@@ -2711,7 +2853,8 @@ export class LegacyService implements OnModuleInit {
         FROM audit_logs a
         LEFT JOIN users u ON u.id = a.actor_id
         LEFT JOIN agents g ON g.id = a.actor_id
-        WHERE a.project_id = $1
+        WHERE a.project_id IS NOT NULL AND ${projectScopeSql}
+        ${orgOnlyBranch}
       )
       -- The Zyra chat flow calls the shared createTestCase/patchTestCaseFromZyra helpers (which
       -- already log testcase_created/testcase_updated) and then logs a second zyra_created/
@@ -2719,8 +2862,9 @@ export class LegacyService implements OnModuleInit {
       -- as duplicate feed rows for the same mutation. Drop the plain testcase_* row whenever a
       -- zyra_* sibling exists for the same entity within a few seconds; the zyra_* row carries
       -- the AI-specific action label and reason, and actor attribution already says who/what did it.
-      SELECT ae.*
+      SELECT ae.*, pr.name AS project_name
       FROM activity_events ae
+      LEFT JOIN projects pr ON pr.id = ae.project_id
       WHERE ${outerWhere}
         AND NOT (
           ae.action IN ('testcase_created', 'testcase_updated')
@@ -2773,6 +2917,132 @@ export class LegacyService implements OnModuleInit {
         ORDER BY count DESC
         `,
         [projectId]
+      )
+    ]);
+
+    const w = weekly.rows[0] || {};
+    return {
+      weekly: {
+        created: Number(w.created || 0),
+        updated: Number(w.updated || 0),
+        aiActions: Number(w.ai_actions || 0),
+        deleted: Number(w.deleted || 0),
+        total: Number(w.total || 0)
+      },
+      activeMembers: leaderboard.rows.map(toCamel),
+      byEntityType: byEntityType.rows.map(toCamel)
+    };
+  }
+
+  // ─── Workspace-wide Activity (master feed) ──────────────────────────────────
+  // Owner-only rollup across every project in the workspace, plus pure workspace-level
+  // events (invites, membership changes) that have no project at all. Same shape/filters
+  // as the per-project feed, with an added projectId filter and projectName on every row.
+
+  async workspaceActivity(userId: string | null | undefined, query: Body) {
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
+    if (this.normalizeRole(workspace.role) !== "owner")
+      throw new ForbiddenException({ error: "Only the workspace owner can view the workspace activity feed" });
+    return this.listWorkspaceActivity(workspace.id, query);
+  }
+
+  async workspaceActivitySummaryForUser(userId: string | null | undefined) {
+    const uid = this.requireUser(userId);
+    const workspace = await this.workspace(uid);
+    if (this.normalizeRole(workspace.role) !== "owner")
+      throw new ForbiddenException({ error: "Only the workspace owner can view the workspace activity feed" });
+    return this.workspaceActivitySummary(workspace.id);
+  }
+
+  private async listWorkspaceActivity(organizationId: string, query: Body) {
+    const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100);
+    const offset = Math.max(Number(query.offset || 0), 0);
+    const entityType = String(query.entityType || "").trim();
+    const actorId = String(query.actorId || "").trim();
+    const projectId = String(query.projectId || "").trim();
+    const search = String(query.search || "").trim();
+    const since = String(query.since || "").trim();
+    const values: any[] = [organizationId];
+    const filters = ["true"];
+    if (entityType) {
+      values.push(entityType.split(",").map((t) => t.trim()).filter(Boolean));
+      filters.push(`entity_type = ANY($${values.length}::text[])`);
+    }
+    if (actorId) {
+      values.push(actorId);
+      filters.push(`actor_id = $${values.length}`);
+    }
+    if (projectId) {
+      values.push(projectId);
+      filters.push(`project_id = $${values.length}`);
+    }
+    if (since) {
+      values.push(since);
+      filters.push(`created_at >= $${values.length}::timestamptz`);
+    }
+    if (search) {
+      values.push(`%${search.toLowerCase()}%`);
+      filters.push(`(lower(coalesce(entity_name,'')) LIKE $${values.length} OR lower(coalesce(actor_name,'')) LIKE $${values.length} OR lower(action) LIKE $${values.length})`);
+    }
+    const where = filters.join(" AND ");
+
+    const eventsSql = this.activityEventsSql(
+      where,
+      "project_id IN (SELECT id FROM projects WHERE organization_id = $1)",
+      "organization_id = $1"
+    );
+
+    const total = await this.db.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM (${eventsSql}) counted`,
+      values
+    );
+    values.push(limit, offset);
+    const res = await this.db.query(
+      `${eventsSql} ORDER BY created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values
+    );
+    return { list: res.rows.map(toCamel), total: Number(total.rows[0]?.count || 0) };
+  }
+
+  private async workspaceActivitySummary(organizationId: string) {
+    const eventsSql = this.activityEventsSql(
+      "ae.created_at >= now() - interval '7 days'",
+      "project_id IN (SELECT id FROM projects WHERE organization_id = $1)",
+      "organization_id = $1"
+    );
+    const [weekly, leaderboard, byEntityType] = await Promise.all([
+      this.db.query(
+        `
+        SELECT
+          COUNT(*) FILTER (WHERE action ILIKE 'zyra%')::int AS ai_actions,
+          COUNT(*) FILTER (WHERE action NOT ILIKE 'zyra%' AND action ILIKE '%creat%')::int AS created,
+          COUNT(*) FILTER (WHERE action NOT ILIKE 'zyra%' AND action ILIKE '%updat%')::int AS updated,
+          COUNT(*) FILTER (WHERE action NOT ILIKE 'zyra%' AND action ILIKE '%delet%')::int AS deleted,
+          COUNT(*)::int AS total
+        FROM (${eventsSql}) e
+        `,
+        [organizationId]
+      ),
+      this.db.query(
+        `
+        SELECT actor_id, actor_name, actor_email, actor_kind, COUNT(*)::int AS count
+        FROM (${eventsSql}) e
+        WHERE actor_id IS NOT NULL
+        GROUP BY actor_id, actor_name, actor_email, actor_kind
+        ORDER BY count DESC
+        LIMIT 6
+        `,
+        [organizationId]
+      ),
+      this.db.query(
+        `
+        SELECT entity_type, COUNT(*)::int AS count
+        FROM (${eventsSql}) e
+        GROUP BY entity_type
+        ORDER BY count DESC
+        `,
+        [organizationId]
       )
     ]);
 

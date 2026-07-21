@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:7000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:7000";
 
 type RequestInitWithBody = Omit<RequestInit, "body"> & { body?: unknown };
 
@@ -241,6 +241,13 @@ export type WorkspaceRole = "owner" | "manager" | "qa_engineer";
 
 export async function getWorkspace(): Promise<WorkspaceInfo> {
   return api<WorkspaceInfo>("/api/workspace");
+}
+
+export async function updateWorkspace(data: { name: string }): Promise<WorkspaceInfo> {
+  return api<WorkspaceInfo>("/api/workspace", {
+    method: "PATCH",
+    body: data,
+  });
 }
 
 export interface WorkspaceListItem extends WorkspaceInfo {
@@ -806,6 +813,37 @@ export async function addProjectMember(projectId: string, data: { userId: string
 
 export async function removeProjectMember(projectId: string, userId: string): Promise<void> {
   await api(`/api/projects/${projectId}/members/${userId}`, { method: "DELETE" });
+}
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  scopes: string[];
+  tokenPrefix: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+export interface ApiTokenWithSecret extends ApiToken {
+  token: string;
+}
+
+export async function listApiKeys(projectId: string): Promise<ApiToken[]> {
+  return api<ApiToken[]>(`/api/projects/${projectId}/apikeys`);
+}
+
+export async function createApiKey(
+  projectId: string,
+  data: { name: string; scopes?: string[] }
+): Promise<ApiTokenWithSecret> {
+  return api<ApiTokenWithSecret>(`/api/projects/${projectId}/apikeys`, { method: "POST", body: data });
+}
+
+export async function revokeApiKey(projectId: string, keyId: string): Promise<void> {
+  await api(`/api/projects/${projectId}/apikeys/${keyId}`, { method: "DELETE" });
+}
+
+export function getMcpUrl(projectId: string): string {
+  return `${API_BASE}/api/projects/${projectId}/mcp`;
 }
 
 // Suites
@@ -2661,6 +2699,40 @@ export interface ActivitySummary {
 
 export async function getActivitySummary(projectId: string): Promise<ActivitySummary> {
   return api<ActivitySummary>(`/api/projects/${projectId}/activity/summary`);
+}
+
+// ── Workspace Activity (master feed, owner-only) ──
+
+export interface WorkspaceActivityLogItem extends ActivityLogItem {
+  projectId: string | null;
+  projectName: string | null;
+}
+
+export async function listWorkspaceActivity(params?: {
+  limit?: number;
+  offset?: number;
+  entityType?: string;
+  actorId?: string;
+  projectId?: string;
+  search?: string;
+  since?: string;
+}): Promise<{ list: WorkspaceActivityLogItem[]; total: number }> {
+  const sp = new URLSearchParams();
+  if (params?.limit != null) sp.set("limit", String(params.limit));
+  if (params?.offset != null) sp.set("offset", String(params.offset));
+  if (params?.entityType) sp.set("entityType", params.entityType);
+  if (params?.actorId) sp.set("actorId", params.actorId);
+  if (params?.projectId) sp.set("projectId", params.projectId);
+  if (params?.search) sp.set("search", params.search);
+  if (params?.since) sp.set("since", params.since);
+  const query = sp.toString();
+  return api<{ list: WorkspaceActivityLogItem[]; total: number }>(
+    `/api/workspace/activity${query ? `?${query}` : ""}`
+  );
+}
+
+export async function getWorkspaceActivitySummary(): Promise<ActivitySummary> {
+  return api<ActivitySummary>("/api/workspace/activity/summary");
 }
 
 // ── Tesbo Test Manager reports module ─────────────────────────────────────────

@@ -57,7 +57,9 @@ function makeService(opts: {
     getInvitationRowOrThrow:
       opts.invitation instanceof Error
         ? jest.fn().mockRejectedValue(opts.invitation)
-        : jest.fn().mockResolvedValue(opts.invitation)
+        : jest.fn().mockResolvedValue(opts.invitation),
+    logWorkspaceActivity: jest.fn().mockResolvedValue(undefined),
+    logProjectActivity: jest.fn().mockResolvedValue(undefined)
   } as unknown as LegacyService;
 
   const svc = new SignupService(db, config, otp, password, auth, audit, legacy);
@@ -130,7 +132,7 @@ describe("SignupService — invite-based registration", () => {
     const PENDING = { id: "pending-1", email: "bob@example.com", name: "Bob Builder", password_hash: "hashed:supersecret", invitation_id: "inv-1" };
 
     it("creates the user, assigns the invited role in the org and its projects, and marks the invite accepted", async () => {
-      const { svc, txQuery, query, auth, audit } = makeService({ invitation: INVITE, dbOpts: { pendingSignup: PENDING } });
+      const { svc, txQuery, query, auth, audit, legacy } = makeService({ invitation: INVITE, dbOpts: { pendingSignup: PENDING } });
 
       const result = await svc.verifyInviteRegistration("raw-token", "123456", "1.2.3.4", "ua", req, res);
       expect(result).toEqual({ ok: true, userId: "new-user-1", organizationId: "org-1" });
@@ -153,6 +155,12 @@ describe("SignupService — invite-based registration", () => {
 
       expect(auth.signInUser).toHaveBeenCalledWith("new-user-1", "bob@example.com", req, res);
       expect(audit.log).toHaveBeenCalledWith("new-user-1", "invite_registration_completed", "organization", "org-1", "{}", "1.2.3.4", "ua");
+      expect(legacy.logWorkspaceActivity).toHaveBeenCalledWith(
+        "org-1", "new-user-1", "invitation_accepted", "invitation", "inv-1", "bob@example.com", { role: "qa_engineer", viaRegistration: true }
+      );
+      expect(legacy.logProjectActivity).toHaveBeenCalledWith(
+        "proj-1", "new-user-1", "project_member_added", "project_member", "new-user-1", "bob@example.com", { role: "qa_engineer", via: "invitation_registered" }
+      );
       // Sanity: query() (non-transactional) is untouched by the transaction's own inserts.
       expect(query.mock.calls.some((c) => String(c[0]).includes("INSERT INTO users"))).toBe(false);
     });

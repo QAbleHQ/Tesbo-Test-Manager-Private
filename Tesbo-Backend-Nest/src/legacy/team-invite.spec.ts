@@ -23,7 +23,7 @@ function makeDb(
     insertedInvitation?: Record<string, unknown> | null;
     inviter?: { name: string | null; email: string } | null;
     projectNames?: { name: string }[];
-    cancelInvite?: { id: string; status: string; invited_by: string | null } | null;
+    cancelInvite?: { id: string; status: string; invited_by: string | null; email?: string } | null;
     resendInvite?: { id: string; email: string; role: string; status: string; invited_by: string | null; project_ids: string[] } | null;
     invitationByTokenRow?: Record<string, unknown> | null;
     hasAccount?: boolean;
@@ -55,7 +55,7 @@ function makeDb(
     if (sql.includes("SELECT name FROM projects WHERE id = ANY($1::uuid[])")) {
       return Promise.resolve({ rows: opts.projectNames ?? [] });
     }
-    if (sql.includes("SELECT id, status, invited_by FROM invitations")) {
+    if (sql.includes("SELECT id, status, invited_by, email FROM invitations")) {
       return Promise.resolve({ rows: opts.cancelInvite ? [opts.cancelInvite] : [] });
     }
     if (sql.includes("UPDATE invitations SET status = 'cancelled'")) {
@@ -257,7 +257,7 @@ describe("LegacyService — team invitations", () => {
     it("lets the owner cancel any pending invite", async () => {
       const { svc, query } = makeService({
         workspace: OWNER_WORKSPACE,
-        cancelInvite: { id: "inv-1", status: "pending", invited_by: "someone-else" }
+        cancelInvite: { id: "inv-1", status: "pending", invited_by: "someone-else", email: "bob@example.com" }
       });
       await svc.cancelInvitation("owner-user", "inv-1");
       const updateCall = query.mock.calls.find((c) => String(c[0]).includes("UPDATE invitations SET status = 'cancelled'"));
@@ -268,7 +268,7 @@ describe("LegacyService — team invitations", () => {
     it("lets a manager cancel only the invites they sent", async () => {
       const { svc } = makeService({
         workspace: MANAGER_WORKSPACE,
-        cancelInvite: { id: "inv-1", status: "pending", invited_by: "someone-else" }
+        cancelInvite: { id: "inv-1", status: "pending", invited_by: "someone-else", email: "bob@example.com" }
       });
       await expectRejection(svc.cancelInvitation("manager-user", "inv-1"), ForbiddenException, {
         error: "You can only cancel invitations you sent"
@@ -283,7 +283,7 @@ describe("LegacyService — team invitations", () => {
     it("refuses to cancel a non-pending invite", async () => {
       const { svc } = makeService({
         workspace: OWNER_WORKSPACE,
-        cancelInvite: { id: "inv-1", status: "accepted", invited_by: "owner-user" }
+        cancelInvite: { id: "inv-1", status: "accepted", invited_by: "owner-user", email: "bob@example.com" }
       });
       await expectRejection(svc.cancelInvitation("owner-user", "inv-1"), BadRequestException, {
         error: "Only pending invitations can be cancelled"

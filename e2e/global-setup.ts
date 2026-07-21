@@ -8,14 +8,42 @@ import { env } from "./utils/env";
 const AUTH_DIR = path.join(__dirname, ".auth");
 const STATE_PATH = path.join(AUTH_DIR, "state.json");
 const CONTEXT_PATH = path.join(AUTH_DIR, "context.json");
+const STATE_PATH_B = path.join(AUTH_DIR, "state-b.json");
+const CONTEXT_PATH_B = path.join(AUTH_DIR, "context-b.json");
+
+// One tenant's worth of provisioning inputs — account A and account B (see utils/env.ts) each
+// pass their own set through the same provisioning/bootstrap logic below.
+type Account = {
+  email: string;
+  password: string;
+  name: string;
+  orgName: string;
+  projectName: string;
+};
+
+const accountA: Account = {
+  email: env.testEmail,
+  password: env.testPassword,
+  name: env.testName,
+  orgName: env.orgName,
+  projectName: env.projectName,
+};
+
+const accountB: Account = {
+  email: env.testEmailB,
+  password: env.testPasswordB,
+  name: env.testNameB,
+  orgName: env.orgNameB,
+  projectName: env.projectNameB,
+};
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function tryLogin(api: APIRequestContext): Promise<boolean> {
+async function tryLogin(api: APIRequestContext, account: Account): Promise<boolean> {
   const res = await api.post("/api/auth/password/login", {
-    data: { email: env.testEmail, password: env.testPassword },
+    data: { email: account.email, password: account.password },
     failOnStatusCode: false,
   });
   return res.ok();
@@ -47,27 +75,27 @@ async function tryScrapeOtpFromDockerLogs(email: string): Promise<string | null>
   return null;
 }
 
-async function provisionUserViaOtp(api: APIRequestContext): Promise<boolean> {
+async function provisionUserViaOtp(api: APIRequestContext, account: Account): Promise<boolean> {
   const startRes = await api.post("/api/auth/signup/start", {
-    data: { name: env.testName, email: env.testEmail, password: env.testPassword },
+    data: { name: account.name, email: account.email, password: account.password },
     failOnStatusCode: false,
   });
   if (!startRes.ok()) {
     throw new Error(
-      `Failed to start signup for ${env.testEmail}: ${startRes.status()} ${await startRes.text()}`,
+      `Failed to start signup for ${account.email}: ${startRes.status()} ${await startRes.text()}`,
     );
   }
 
-  const code = await tryScrapeOtpFromDockerLogs(env.testEmail);
+  const code = await tryScrapeOtpFromDockerLogs(account.email);
   if (!code) return false;
 
   const verifyRes = await api.post("/api/auth/signup/verify", {
-    data: { email: env.testEmail, code },
+    data: { email: account.email, code },
     failOnStatusCode: false,
   });
   if (!verifyRes.ok()) {
     throw new Error(
-      `OTP verification failed for ${env.testEmail}: ${verifyRes.status()} ${await verifyRes.text()}`,
+      `OTP verification failed for ${account.email}: ${verifyRes.status()} ${await verifyRes.text()}`,
     );
   }
   return true;
@@ -86,11 +114,11 @@ function hashPasswordForSeed(password: string): string {
 // Sidesteps OTP delivery entirely by inserting the user straight into Postgres — used when
 // the console-log OTP path comes up empty (e.g. a real POSTMARK_API_TOKEN is configured, so
 // the code went out as an actual email nobody can read).
-function provisionUserViaDatabaseSeed(): void {
-  const passwordHash = hashPasswordForSeed(env.testPassword);
+function provisionUserViaDatabaseSeed(account: Account): void {
+  const passwordHash = hashPasswordForSeed(account.password);
   const escape = (value: string) => value.replace(/'/g, "''");
   const sql =
-    `INSERT INTO users (email, name, password_hash) VALUES ('${escape(env.testEmail)}', '${escape(env.testName)}', '${passwordHash}') ` +
+    `INSERT INTO users (email, name, password_hash) VALUES ('${escape(account.email)}', '${escape(account.name)}', '${passwordHash}') ` +
     "ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash;";
 
   try {
@@ -100,23 +128,23 @@ function provisionUserViaDatabaseSeed(): void {
     );
   } catch (error) {
     throw new Error(
-      `Could not seed ${env.testEmail} directly into Postgres via docker (service "${env.dbService}"). ` +
+      `Could not seed ${account.email} directly into Postgres via docker (service "${env.dbService}"). ` +
         "This local-only fallback requires docker + the compose stack to be reachable from where these " +
         "tests run. If you're targeting a remote environment, pre-create the user there and set " +
-        `E2E_TEST_EMAIL / E2E_TEST_PASSWORD, or set E2E_AUTO_PROVISION=false. Underlying error: ${String(error)}`,
+        `E2E_TEST_EMAIL / E2E_TEST_PASSWORD (or the _B variants), or set E2E_AUTO_PROVISION=false. Underlying error: ${String(error)}`,
     );
   }
 }
 
-async function provisionUser(api: APIRequestContext): Promise<void> {
-  const provisionedViaOtp = await provisionUserViaOtp(api);
+async function provisionUser(api: APIRequestContext, account: Account): Promise<void> {
+  const provisionedViaOtp = await provisionUserViaOtp(api, account);
   if (!provisionedViaOtp) {
-    provisionUserViaDatabaseSeed();
+    provisionUserViaDatabaseSeed(account);
   }
 
-  const loggedIn = await tryLogin(api);
+  const loggedIn = await tryLogin(api, account);
   if (!loggedIn) {
-    throw new Error(`Provisioned ${env.testEmail} but the follow-up password login still failed.`);
+    throw new Error(`Provisioned ${account.email} but the follow-up password login still failed.`);
   }
 }
 
@@ -131,12 +159,13 @@ function extractList(body: unknown): any[] {
 
 async function ensureWorkspaceAndProject(
   api: APIRequestContext,
+  account: Account,
 ): Promise<{ organizationId: string; projectId: string }> {
   const workspaceRes = await api.get("/api/workspace", { failOnStatusCode: false });
 
   if (workspaceRes.status() === 404) {
     const res = await api.post("/api/onboarding/org-and-project", {
-      data: { orgName: env.orgName, projectName: env.projectName },
+      data: { orgName: account.orgName, projectName: account.projectName },
     });
     if (!res.ok()) {
       throw new Error(`Failed to bootstrap org+project: ${res.status()} ${await res.text()}`);
@@ -152,10 +181,10 @@ async function ensureWorkspaceAndProject(
 
   const projectsRes = await api.get("/api/projects");
   const projects = extractList(await projectsRes.json());
-  const existing = projects.find((p) => p.name === env.projectName);
+  const existing = projects.find((p) => p.name === account.projectName);
   if (existing) return { organizationId: workspace.id, projectId: existing.id };
 
-  const createRes = await api.post("/api/projects", { data: { name: env.projectName } });
+  const createRes = await api.post("/api/projects", { data: { name: account.projectName } });
   if (!createRes.ok()) {
     throw new Error(`Failed to create project: ${createRes.status()} ${await createRes.text()}`);
   }
@@ -165,24 +194,28 @@ async function ensureWorkspaceAndProject(
 
 async function provisionAndResolveContext(
   api: APIRequestContext,
+  account: Account,
 ): Promise<{ organizationId: string; projectId: string }> {
-  const loggedIn = await tryLogin(api);
+  const loggedIn = await tryLogin(api, account);
   if (!loggedIn) {
     if (!env.autoProvision) {
       throw new Error(
-        `No usable session for ${env.testEmail} at ${env.apiBaseUrl} and auto-provisioning is ` +
-          "disabled. Either pre-create this user (matching E2E_TEST_EMAIL / E2E_TEST_PASSWORD) on " +
+        `No usable session for ${account.email} at ${env.apiBaseUrl} and auto-provisioning is ` +
+          "disabled. Either pre-create this user (matching its configured email/password env vars) on " +
           "the target environment, or set E2E_AUTO_PROVISION=true if you have docker log access to it.",
       );
     }
-    await provisionUser(api);
+    await provisionUser(api, account);
   }
 
-  return ensureWorkspaceAndProject(api);
+  return ensureWorkspaceAndProject(api, account);
 }
 
-export default async function globalSetup(): Promise<void> {
-  fs.mkdirSync(AUTH_DIR, { recursive: true });
+async function setUpAccount(
+  account: Account,
+  statePath: string,
+  contextPath: string,
+): Promise<void> {
   const api = await request.newContext({ baseURL: env.apiBaseUrl });
 
   try {
@@ -193,7 +226,7 @@ export default async function globalSetup(): Promise<void> {
     let result: { organizationId: string; projectId: string } | null = null;
     for (let attempt = 1; attempt <= 3 && !result; attempt++) {
       try {
-        result = await provisionAndResolveContext(api);
+        result = await provisionAndResolveContext(api, account);
       } catch (error) {
         lastError = error;
         if (attempt < 3) await sleep(2_000);
@@ -201,12 +234,21 @@ export default async function globalSetup(): Promise<void> {
     }
     if (!result) throw lastError;
 
-    await api.storageState({ path: STATE_PATH });
+    await api.storageState({ path: statePath });
     fs.writeFileSync(
-      CONTEXT_PATH,
-      JSON.stringify({ organizationId: result.organizationId, projectId: result.projectId, email: env.testEmail }, null, 2),
+      contextPath,
+      JSON.stringify({ organizationId: result.organizationId, projectId: result.projectId, email: account.email }, null, 2),
     );
   } finally {
     await api.dispose();
   }
+}
+
+export default async function globalSetup(): Promise<void> {
+  fs.mkdirSync(AUTH_DIR, { recursive: true });
+  // Two independent tenants, provisioned with separate APIRequestContexts so their session
+  // cookies never mix. Account B only backs the cross-tenant authorization suite — every other
+  // spec keeps using account A via the default storageState in playwright.config.ts.
+  await setUpAccount(accountA, STATE_PATH, CONTEXT_PATH);
+  await setUpAccount(accountB, STATE_PATH_B, CONTEXT_PATH_B);
 }

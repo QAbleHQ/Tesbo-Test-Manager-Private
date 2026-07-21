@@ -23,6 +23,8 @@ export class AppConfigService {
   readonly frontendUrl = this.string("FRONTEND_URL", "http://localhost:1010");
   readonly uploadDir = this.string("UPLOAD_DIR", "./uploads");
   readonly maxUploadSize = this.integer("MAX_UPLOAD_SIZE", 10485760);
+  // Applies to JSON/urlencoded request bodies (e.g. knowledge base document saves), not file uploads
+  readonly maxRequestBodySize = this.integer("MAX_REQUEST_BODY_SIZE", 20 * 1024 * 1024);
   // Object storage: defaults to local disk (uploadDir above). Set STORAGE_DRIVER=s3 to use
   // any S3-compatible service (AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces, etc).
   readonly storageDriver = this.string("STORAGE_DRIVER", "local").toLowerCase() === "s3" ? "s3" : "local";

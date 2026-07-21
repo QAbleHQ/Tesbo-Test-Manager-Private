@@ -75,6 +75,11 @@ export class LegacyController {
     return this.legacy.switchWorkspace(req.userId, id);
   }
 
+  @Patch("/api/workspace")
+  updateWorkspace(@Req() req: AuthenticatedRequest, @Body() body: Record<string, any>) {
+    return this.legacy.updateWorkspace(req.userId, body);
+  }
+
   @Get("/api/workspace/analytics")
   async workspaceAnalytics(@Req() req: AuthenticatedRequest) {
     const workspace = await this.legacy.workspace(req.userId);
@@ -104,13 +109,13 @@ export class LegacyController {
   }
 
   @Put("/api/workspace/project-access")
-  setProjectAccess(@Body() body: Record<string, any>) {
-    return this.legacy.addProjectMember(body.projectId, { userId: body.userId, role: body.role });
+  setProjectAccess(@Req() req: AuthenticatedRequest, @Body() body: Record<string, any>) {
+    return this.legacy.addProjectMember(req.userId, body.projectId, { userId: body.userId, role: body.role });
   }
 
   @Delete("/api/workspace/project-access")
-  removeProjectAccess(@Body() body: Record<string, any>) {
-    return this.legacy.removeProjectMember(body.projectId, body.userId);
+  removeProjectAccess(@Req() req: AuthenticatedRequest, @Body() body: Record<string, any>) {
+    return this.legacy.removeProjectMember(req.userId, body.projectId, body.userId);
   }
 
   @Get("/api/workspace/ai-keys")
@@ -199,18 +204,18 @@ export class LegacyController {
   }
 
   @Get("/api/projects/:id/members")
-  projectMembers(@Param("id") id: string) {
-    return this.legacy.projectMembers(id);
+  projectMembers(@Req() req: AuthenticatedRequest, @Param("id") id: string) {
+    return this.legacy.projectMembers(req.userId, id);
   }
 
   @Post("/api/projects/:id/members")
-  addProjectMember(@Param("id") id: string, @Body() body: Record<string, any>) {
-    return this.legacy.addProjectMember(id, body);
+  addProjectMember(@Req() req: AuthenticatedRequest, @Param("id") id: string, @Body() body: Record<string, any>) {
+    return this.legacy.addProjectMember(req.userId, id, body);
   }
 
   @Delete("/api/projects/:id/members/:userId")
-  removeProjectMember(@Param("id") id: string, @Param("userId") userId: string) {
-    return this.legacy.removeProjectMember(id, userId);
+  removeProjectMember(@Req() req: AuthenticatedRequest, @Param("id") id: string, @Param("userId") userId: string) {
+    return this.legacy.removeProjectMember(req.userId, id, userId);
   }
 
   @Get("/api/projects/:id/apikeys")
@@ -1127,13 +1132,23 @@ export class LegacyController {
   }
 
   @Get("/api/projects/:projectId/activity")
-  activity(@Param("projectId") projectId: string, @Query() query: Record<string, any>) {
-    return this.legacy.listActivity(projectId, query);
+  activity(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.listActivityForUser(req.userId, projectId, query);
   }
 
   @Get("/api/projects/:projectId/activity/summary")
-  activitySummary(@Param("projectId") projectId: string) {
-    return this.legacy.activitySummary(projectId);
+  activitySummary(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.activitySummaryForUser(req.userId, projectId);
+  }
+
+  @Get("/api/workspace/activity")
+  workspaceActivity(@Req() req: AuthenticatedRequest, @Query() query: Record<string, any>) {
+    return this.legacy.workspaceActivity(req.userId, query);
+  }
+
+  @Get("/api/workspace/activity/summary")
+  workspaceActivitySummary(@Req() req: AuthenticatedRequest) {
+    return this.legacy.workspaceActivitySummaryForUser(req.userId);
   }
 
   @Get("/api/notifications")

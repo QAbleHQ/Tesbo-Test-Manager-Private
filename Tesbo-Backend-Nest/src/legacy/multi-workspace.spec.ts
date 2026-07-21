@@ -217,7 +217,7 @@ describe("LegacyService — multi-workspace / organization switching", () => {
     it("lets the owner remove a non-owner member", async () => {
       const { db, query } = makeDb([
         activeOrgRoute(ORG_1),
-        { match: "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [{ role: "qa_engineer" }] },
+        { match: "om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id", rows: [{ role: "qa_engineer" }] },
         { match: "DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [] }
       ]);
       const svc = makeLegacy(db);
@@ -233,13 +233,13 @@ describe("LegacyService — multi-workspace / organization switching", () => {
       expect(err).toBeInstanceOf(BadRequestException);
       expect(err.getResponse()).toEqual({ error: "You cannot remove yourself" });
       // Short-circuits before ever checking membership rows or deleting.
-      expect(query.mock.calls.some((c) => String(c[0]).includes("SELECT role FROM organization_members"))).toBe(false);
+      expect(query.mock.calls.some((c) => String(c[0]).includes("om.role, u.email FROM organization_members"))).toBe(false);
     });
 
     it("404s when the target is not a member of the workspace", async () => {
       const { db } = makeDb([
         activeOrgRoute(ORG_1),
-        { match: "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [] }
+        { match: "om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id", rows: [] }
       ]);
       const svc = makeLegacy(db);
       const err = await rejection(svc.removeWorkspaceMember("owner-user", "ghost-user"));
@@ -250,7 +250,7 @@ describe("LegacyService — multi-workspace / organization switching", () => {
     it("refuses to remove the sole owner of the workspace (last-owner protection)", async () => {
       const { db, query } = makeDb([
         activeOrgRoute(ORG_1),
-        { match: "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [{ role: "owner" }] },
+        { match: "om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id", rows: [{ role: "owner" }] },
         { match: "SELECT COUNT(*) AS count FROM organization_members WHERE organization_id = $1 AND role = 'owner'", rows: [{ count: "1" }] }
       ]);
       const svc = makeLegacy(db);
@@ -263,7 +263,7 @@ describe("LegacyService — multi-workspace / organization switching", () => {
     it("allows removing an owner when there is more than one owner in the workspace", async () => {
       const { db, query } = makeDb([
         activeOrgRoute(ORG_1),
-        { match: "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [{ role: "owner" }] },
+        { match: "om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id", rows: [{ role: "owner" }] },
         { match: "SELECT COUNT(*) AS count FROM organization_members WHERE organization_id = $1 AND role = 'owner'", rows: [{ count: "2" }] },
         { match: "DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [] }
       ]);
@@ -276,7 +276,7 @@ describe("LegacyService — multi-workspace / organization switching", () => {
     it("forbids a non-owner (manager) from removing team members", async () => {
       const { db, query } = makeDb([
         activeOrgRoute({ ...ORG_1, role: "manager" }),
-        { match: "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [{ role: "qa_engineer" }] },
+        { match: "om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id", rows: [{ role: "qa_engineer" }] },
         { match: "SELECT COUNT(*) AS count FROM organization_members WHERE organization_id = $1 AND role = 'owner'", rows: [{ count: "1" }] }
       ]);
       const svc = makeLegacy(db);
@@ -291,7 +291,7 @@ describe("LegacyService — multi-workspace / organization switching", () => {
     it("lets the owner change a member's role", async () => {
       const { db, query } = makeDb([
         activeOrgRoute(ORG_1),
-        { match: "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [{ role: "qa_engineer" }] },
+        { match: "om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id", rows: [{ role: "qa_engineer" }] },
         { match: "UPDATE organization_members SET role = $1 WHERE organization_id = $2 AND user_id = $3", rows: [] }
       ]);
       const svc = makeLegacy(db);
@@ -306,7 +306,7 @@ describe("LegacyService — multi-workspace / organization switching", () => {
       const err = await rejection(svc.changeWorkspaceMemberRole("manager-user", "target-user", "qa_engineer"));
       expect(err).toBeInstanceOf(ForbiddenException);
       expect(err.getResponse()).toEqual({ error: "Only the owner can change roles" });
-      expect(query.mock.calls.some((c) => String(c[0]).includes("SELECT role FROM organization_members"))).toBe(false);
+      expect(query.mock.calls.some((c) => String(c[0]).includes("om.role, u.email FROM organization_members"))).toBe(false);
     });
 
     it("rejects the owner trying to change their own role", async () => {
@@ -320,7 +320,7 @@ describe("LegacyService — multi-workspace / organization switching", () => {
     it("404s when the target member does not exist in the workspace", async () => {
       const { db } = makeDb([
         activeOrgRoute(ORG_1),
-        { match: "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [] }
+        { match: "om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id", rows: [] }
       ]);
       const svc = makeLegacy(db);
       const err = await rejection(svc.changeWorkspaceMemberRole("owner-user", "ghost-user", "manager"));
@@ -331,7 +331,7 @@ describe("LegacyService — multi-workspace / organization switching", () => {
     it("refuses to change another owner's role (owners are immutable via this path)", async () => {
       const { db, query } = makeDb([
         activeOrgRoute(ORG_1),
-        { match: "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [{ role: "owner" }] }
+        { match: "om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id", rows: [{ role: "owner" }] }
       ]);
       const svc = makeLegacy(db);
       const err = await rejection(svc.changeWorkspaceMemberRole("owner-user", "other-owner-user", "manager"));
@@ -343,7 +343,7 @@ describe("LegacyService — multi-workspace / organization switching", () => {
     it("refuses to promote a member to owner through this endpoint", async () => {
       const { db, query } = makeDb([
         activeOrgRoute(ORG_1),
-        { match: "SELECT role FROM organization_members WHERE organization_id = $1 AND user_id = $2", rows: [{ role: "qa_engineer" }] }
+        { match: "om.role, u.email FROM organization_members om JOIN users u ON u.id = om.user_id", rows: [{ role: "qa_engineer" }] }
       ]);
       const svc = makeLegacy(db);
       const err = await rejection(svc.changeWorkspaceMemberRole("owner-user", "target-user", "owner"));

@@ -26,6 +26,14 @@ export const env = {
   orgName: process.env.E2E_ORG_NAME ?? "E2E Smoke Org",
   projectName: process.env.E2E_PROJECT_NAME ?? "E2E Smoke Project",
 
+  // Second, fully independent tenant — used only by the cross-tenant authorization suite
+  // (e2e/api/authorization.spec.ts) to prove account B can't reach account A's resources.
+  testEmailB: process.env.E2E_TEST_EMAIL_B ?? "e2e-smoke-b@tesbo.local",
+  testPasswordB: process.env.E2E_TEST_PASSWORD_B ?? "E2eSmokeTestB!2026",
+  testNameB: process.env.E2E_TEST_NAME_B ?? "E2E Smoke User B",
+  orgNameB: process.env.E2E_ORG_NAME_B ?? "E2E Smoke Org B",
+  projectNameB: process.env.E2E_PROJECT_NAME_B ?? "E2E Smoke Project B",
+
   // Signup requires an OTP. When the target looks local, global-setup tries two ways to get
   // one without a human in the loop, in order: (1) sign up over the real API and scrape the
   // OTP out of `docker compose logs` — works when no Postmark token is configured, since the

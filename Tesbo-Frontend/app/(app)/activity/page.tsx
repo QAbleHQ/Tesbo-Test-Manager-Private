@@ -1,17 +1,18 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, useState, useCallback, useMemo } from "react";
-import Link from "next/link";
-import { IconActivity, IconSearch } from "@tabler/icons-react";
+import { IconActivity, IconSearch, IconLock } from "@tabler/icons-react";
 import {
   authMe,
-  getActivitySummary,
-  getProject,
-  listActivity,
-  listProjectMembers,
+  getWorkspace,
+  getWorkspaceActivitySummary,
+  listWorkspaceActivity,
+  listWorkspaceMembers,
+  listProjects,
   type ActivitySummary,
-  type ActivityLogItem,
+  type WorkspaceActivityLogItem,
+  type ProjectSummary,
 } from "@/lib/api";
 import { Button, EmptyStateBlock, Select } from "@/components/ui";
 import { PageHeader, StandardPageLayout } from "@/components/workflows";
@@ -25,6 +26,9 @@ import {
 
 const TYPE_FILTERS = [
   { value: "", label: "All types" },
+  { value: "project", label: "Projects" },
+  { value: "project_member,workspace_member", label: "Team members" },
+  { value: "invitation", label: "Invitations" },
   { value: "testcase", label: "Test cases" },
   { value: "suite", label: "Suites" },
   { value: "plan", label: "Test plans" },
@@ -33,17 +37,26 @@ const TYPE_FILTERS = [
   { value: "knowledge_folder,knowledge_document,knowledge_file", label: "Knowledge base" },
 ] as const;
 
+function normalizeRole(role: string | undefined): "owner" | "manager" | "qa_engineer" {
+  const n = (role ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/ /g, "_");
+  if (n === "owner") return "owner";
+  if (n === "manager" || n === "admin" || n === "test_manager") return "manager";
+  return "qa_engineer";
+}
+
 const PAGE_SIZE = 30;
 
-export default function ActivityPage() {
-  const params = useParams();
+export default function WorkspaceActivityPage() {
   const router = useRouter();
-  const projectId = params.id as string;
 
-  const [project, setProject] = useState<Record<string, unknown> | null>(null);
+  const [checkingAccess, setCheckingAccess] = useState(true);
+  const [allowed, setAllowed] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
+
   const [members, setMembers] = useState<{ userId: string; name: string; email: string }[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [summary, setSummary] = useState<ActivitySummary | null>(null);
-  const [activities, setActivities] = useState<ActivityLogItem[]>([]);
+  const [activities, setActivities] = useState<WorkspaceActivityLogItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -51,6 +64,7 @@ export default function ActivityPage() {
 
   const [typeFilter, setTypeFilter] = useState("");
   const [actorFilter, setActorFilter] = useState("");
+  const [projectFilter, setProjectFilter] = useState("");
   const [dateFilter, setDateFilter] = useState("");
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -65,11 +79,12 @@ export default function ActivityPage() {
       if (reset) setLoading(true);
       else setLoadingMore(true);
       try {
-        const res = await listActivity(projectId, {
+        const res = await listWorkspaceActivity({
           limit: PAGE_SIZE,
           offset: currentOffset,
           entityType: typeFilter || undefined,
           actorId: actorFilter || undefined,
+          projectId: projectFilter || undefined,
           search: search || undefined,
           since: sinceFor(dateFilter),
         });
@@ -83,7 +98,7 @@ export default function ActivityPage() {
         setLoadingMore(false);
       }
     },
-    [projectId, typeFilter, actorFilter, search, dateFilter]
+    [typeFilter, actorFilter, projectFilter, search, dateFilter]
   );
 
   useEffect(() => {
@@ -92,47 +107,72 @@ export default function ActivityPage() {
         router.replace("/login");
         return;
       }
-      getProject(projectId)
-        .then((p) => setProject(p))
-        .catch(() => router.replace("/projects"));
-      listProjectMembers(projectId)
-        .then((list) => setMembers(list))
-        .catch(() => setMembers([]));
-      getActivitySummary(projectId)
-        .then((s) => setSummary(s))
-        .catch(() => setSummary(null));
+      getWorkspace()
+        .then((ws) => {
+          setWorkspaceName(ws.name ?? "Workspace");
+          const isOwner = normalizeRole(ws.role) === "owner";
+          setAllowed(isOwner);
+          if (isOwner) {
+            listWorkspaceMembers()
+              .then((list) => setMembers(list))
+              .catch(() => setMembers([]));
+            listProjects()
+              .then((list) => setProjects(list))
+              .catch(() => setProjects([]));
+            getWorkspaceActivitySummary()
+              .then((s) => setSummary(s))
+              .catch(() => setSummary(null));
+          }
+        })
+        .finally(() => setCheckingAccess(false));
     });
-  }, [projectId, router]);
+  }, [router]);
 
   useEffect(() => {
+    if (!allowed) return;
     fetchActivities(true, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, typeFilter, actorFilter, search, dateFilter]);
+  }, [allowed, typeFilter, actorFilter, projectFilter, search, dateFilter]);
 
   const hasMore = activities.length < total;
   const groups = useMemo(() => groupByDate(activities), [activities]);
-  const projectName = project ? ((project.name as string) ?? "") : "";
 
   const breadcrumb = (
-    <>
-      <Link href="/projects" className="hover:text-[var(--foreground)]">
-        Projects
-      </Link>
+    <div className="flex items-center gap-2">
+      <span className="text-[var(--foreground)]">{workspaceName}</span>
       <span>/</span>
-      <Link href={`/projects/${projectId}/dashboard`} className="hover:text-[var(--foreground)]">
-        {projectName}
-      </Link>
-      <span>/</span>
-      <span>Activity</span>
-    </>
+      <span className="text-[var(--foreground)]">Activity</span>
+    </div>
   );
+
+  if (checkingAccess) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <p className="text-[var(--muted)]">Loading…</p>
+      </div>
+    );
+  }
+
+  if (!allowed) {
+    return (
+      <StandardPageLayout
+        header={<PageHeader title="Activity" subtitle="Workspace-wide activity across every project" breadcrumb={breadcrumb} />}
+      >
+        <EmptyStateBlock
+          title="Owner access required"
+          description="Only the workspace owner can view the workspace-wide activity feed. Ask your workspace owner if you need visibility into this."
+          icon={<IconLock size={28} stroke={1.5} />}
+        />
+      </StandardPageLayout>
+    );
+  }
 
   return (
     <StandardPageLayout
       header={
         <PageHeader
           title="Activity"
-          subtitle="A full audit log of all actions taken across this project — who did what and when."
+          subtitle="A full audit log of every project, membership, and invitation change across the workspace — who did what and when."
           breadcrumb={breadcrumb}
         />
       }
@@ -147,6 +187,16 @@ export default function ActivityPage() {
                   {TYPE_FILTERS.map((f) => (
                     <option key={f.value} value={f.value}>
                       {f.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="w-[150px]">
+                <Select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)}>
+                  <option value="">All projects</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
                     </option>
                   ))}
                 </Select>
@@ -194,7 +244,7 @@ export default function ActivityPage() {
           ) : activities.length === 0 ? (
             <EmptyStateBlock
               title="No activity yet"
-              description="Actions like creating test cases, updating suites, and Zyra AI actions will appear here."
+              description="Actions like creating projects, adding team members, and sending invitations will appear here."
               icon={<IconActivity size={28} stroke={1.5} />}
             />
           ) : (

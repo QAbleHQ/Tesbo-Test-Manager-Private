@@ -4,7 +4,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createPortal } from "react-dom";
-import { IconChevronRight } from "@tabler/icons-react";
+import { IconChevronRight, IconKey } from "@tabler/icons-react";
 import {
   authMe,
   getProject,
@@ -16,6 +16,7 @@ import {
   listWorkspaceMembers,
   addProjectMember,
   removeProjectMember,
+  listApiKeys,
   type JiraConnection,
   type LinearConnection,
   type TestEnvironmentSetting,
@@ -46,7 +47,7 @@ type ProjectSettingsPayload = {
   [key: string]: unknown;
 };
 
-type SettingsTab = "general" | "testRuns" | "members" | "jira" | "integrations";
+type SettingsTab = "general" | "testRuns" | "members" | "apiTokens" | "jira" | "integrations";
 type ProjectMember = { userId: string; email: string; name: string; role: string; joinedAt: string };
 type WorkspaceMember = { userId: string; email: string; name: string; role: string; joinedAt: string };
 
@@ -99,6 +100,7 @@ export default function ProjectSettingsPage() {
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
   const [changingRoleId, setChangingRoleId] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [apiTokenCount, setApiTokenCount] = useState<number | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
   const [deleteProjectModalOpen, setDeleteProjectModalOpen] = useState(false);
   const [deleteProjectTypedName, setDeleteProjectTypedName] = useState("");
@@ -109,6 +111,7 @@ export default function ProjectSettingsPage() {
       { key: "general", label: "General" },
       { key: "testRuns", label: "Test Environments" },
       { key: "members", label: "Team Members" },
+      { key: "apiTokens", label: "API & MCP" },
       ...(jiraTabEnabled ? [{ key: "jira" as const, label: "Jira" }] : []),
       { key: "integrations", label: "Integrations" },
     ],
@@ -205,6 +208,7 @@ export default function ProjectSettingsPage() {
       }).catch(() => router.replace("/projects"));
       getJiraStatus(projectId).then(setJiraStatus).catch(() => {});
       getLinearStatus(projectId).then(setLinearStatus).catch(() => {});
+      listApiKeys(projectId).then((l) => setApiTokenCount(l.length)).catch(() => {});
       loadMembers().catch(() => {});
     });
   }, [loadMembers, projectId, router]);
@@ -779,6 +783,39 @@ export default function ProjectSettingsPage() {
             </div>
           </Card>
         </section>
+      )}
+      {activeTab === "apiTokens" && (
+        <Card className="p-4 space-y-4">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--foreground)]">API & MCP access</h2>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Generate API tokens so AI agents like Claude Code or Claude Desktop can read and write this project&apos;s test data.
+            </p>
+          </div>
+          <div className="rounded-lg border border-[var(--border)] p-4 flex items-start gap-4">
+            <div className="shrink-0 w-10 h-10 rounded-lg bg-[var(--brand-primary)] flex items-center justify-center">
+              <IconKey className="w-5 h-5 text-white" stroke={1.75} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-[var(--foreground)]">Tesbo API tokens</h3>
+              <p className="text-xs text-[var(--muted)] mt-0.5">
+                {apiTokenCount === null
+                  ? "Loading…"
+                  : apiTokenCount === 0
+                  ? "No API tokens yet"
+                  : `${apiTokenCount} active token${apiTokenCount === 1 ? "" : "s"}`}
+              </p>
+            </div>
+            <div className="shrink-0">
+              <Link
+                href={`/projects/${projectId}/settings/api-tokens`}
+                className="inline-flex h-9 items-center justify-center rounded-[10px] border border-transparent bg-[var(--brand-primary)] px-3.5 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-[var(--brand-hover)]"
+              >
+                Manage API tokens
+              </Link>
+            </div>
+          </div>
+        </Card>
       )}
       {activeTab === "integrations" && (
         <Card className="p-4 space-y-4">

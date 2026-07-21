@@ -25,7 +25,7 @@ import {
   IconLayoutDashboard,
   IconFolders,
 } from "@tabler/icons-react";
-import { authMe, logout } from "@/lib/api";
+import { authMe, getWorkspace, logout } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
@@ -186,12 +186,16 @@ function SidebarContent() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [isWorkspaceOwner, setIsWorkspaceOwner] = useState(false);
 
   useEffect(() => {
     let active = true;
     authMe().then((data) => {
       if (active && data?.isPlatformAdmin) setIsPlatformAdmin(true);
     });
+    getWorkspace().then((ws) => {
+      if (active && (ws.role ?? "").trim().toLowerCase() === "owner") setIsWorkspaceOwner(true);
+    }).catch(() => undefined);
     return () => { active = false; };
   }, []);
 
@@ -295,6 +299,9 @@ function SidebarContent() {
               <div className="space-y-0.5">
                 <NavLink href="/dashboard" label="Dashboard" icon="dashboard" active={pathname === "/dashboard"} collapsed={isCollapsed} />
                 <NavLink href="/projects" label="Projects" icon="folders" active={pathname === "/projects"} collapsed={isCollapsed} />
+                {isWorkspaceOwner && (
+                  <NavLink href="/activity" label="Activity" icon="activity" active={pathname === "/activity"} collapsed={isCollapsed} />
+                )}
               </div>
             </div>
           </div>
