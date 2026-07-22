@@ -63,7 +63,7 @@ export function FolderTreeNodeRow({
           <Menu
             align="right"
             trigger={
-              <button type="button" onClick={(e) => e.stopPropagation()} className="shrink-0 rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-[var(--surface-tertiary)]">
+              <button type="button" className="shrink-0 rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-[var(--surface-tertiary)]">
                 <IconDots size={14} />
               </button>
             }

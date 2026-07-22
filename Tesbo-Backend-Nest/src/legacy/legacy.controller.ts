@@ -542,7 +542,9 @@ export class LegacyController {
         title: "Example login test",
         description: "Verify a valid user can sign in.",
         preconditions: "User account exists.",
-        steps: "Open login page | Enter credentials | Submit form",
+        // "action => expected result" per step, separated by " | " — the expected result after
+        // "=>" is optional but importing it this way carries it into each step's Expected Result.
+        steps: "Open login page => Login form is displayed | Enter valid credentials => Fields accept the input | Submit the form => User is redirected to the dashboard",
         testData: "user@example.com",
         priority: "P2",
         severity: "Medium",
@@ -587,8 +589,8 @@ export class LegacyController {
   }
 
   @Get("/api/projects/:projectId/dashboard")
-  projectDashboard(@Param("projectId") projectId: string) {
-    return this.legacy.projectDashboardSummary(projectId);
+  projectDashboard(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.projectDashboardSummary(req.userId, projectId);
   }
 
   @Get("/api/cycles/:cycleId/report/summary")

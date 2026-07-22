@@ -1383,7 +1383,11 @@ export class LegacyService implements OnModuleInit {
     ] as const) {
       if (query[param]) {
         values.push(query[param]);
-        filters.push(`${column} = $${values.length}`);
+        // "type" can enter the system with inconsistent casing (e.g. an imported testcase
+        // whose source file used "REGRESSION" instead of the app's canonical "Regression") —
+        // match case-insensitively so filtering by type still finds it instead of silently
+        // returning zero rows.
+        filters.push(param === "type" ? `lower(${column}) = lower($${values.length})` : `${column} = $${values.length}`);
       }
     }
     if (query.search) {
@@ -1572,13 +1576,14 @@ export class LegacyService implements OnModuleInit {
     if (!ids.length) return;
     await this.db.query(
       `UPDATE testcases SET priority=COALESCE($2,priority), suite_id=COALESCE($3,suite_id),
-       status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), updated_by=$6, updated_at=now()
+       status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
+       updated_by=$7, updated_at=now()
        WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
-      [ids, body.priority || null, body.suiteId || null, body.status || null, body.ownerId || null, uid]
+      [ids, body.priority || null, body.suiteId || null, body.status || null, body.ownerId || null, body.automationStatus || null, uid]
     );
     await this.logProjectActivity(projectId, uid, "testcase_bulk_updated", "testcase", null, null, {
       testcaseIds: ids,
-      fields: { priority: body.priority || null, suiteId: body.suiteId || null, status: body.status || null, ownerId: body.ownerId || null }
+      fields: { priority: body.priority || null, suiteId: body.suiteId || null, status: body.status || null, ownerId: body.ownerId || null, automationStatus: body.automationStatus || null }
     });
   }
 
@@ -2627,7 +2632,8 @@ export class LegacyService implements OnModuleInit {
     };
   }
 
-  async projectDashboardSummary(projectId: string) {
+  async projectDashboardSummary(userId: string | null | undefined, projectId: string) {
+    await this.requireProjectAccess(userId, projectId);
     const [counts, requirements, bugSeverity, activeRuns, addedThisWeek, passRateWindows] = await Promise.all([
       this.analytics(projectId),
       this.requirementsSummary(projectId),
@@ -5597,7 +5603,7 @@ export class LegacyService implements OnModuleInit {
   private async buildZyraChatDecision(projectId: string, userId: string, sessionId: string, message: string): Promise<ZyraChatDecision> {
     const intent = this.detectZyraChatIntent(message);
     const mentionedJiraKeys = this.extractJiraIssueKeys(message);
-    const [history, knowledgeFallback, ragKnowledge, existingTestcases, allocation, projectSnapshot, mentionedJira, lastCompletedPlanRes] = await Promise.all([
+    const [history, knowledgeFallback, ragKnowledge, folderKnowledge, existingTestcases, allocation, projectSnapshot, mentionedJira, lastCompletedPlanRes] = await Promise.all([
       this.db.query(
         `SELECT role, content, reasoning_summary, testcases
          FROM zyra_chat_messages
@@ -5612,13 +5618,16 @@ export class LegacyService implements OnModuleInit {
       // pays no extra latency — retrieveKnowledgeContext never throws, resolves to [] on
       // any failure.
       this.ragRetrieval.retrieveKnowledgeContext(projectId, message),
+      // Direct folder-name lookup — recency/embeddings never match on a folder's name alone
+      // (e.g. "knowledge base 'EAD-11215' folder"), only on document content.
+      this.knowledgeFolderSnapshot(projectId, message, mentionedJiraKeys),
       this.existingTestcaseSnapshot(projectId, message, ""),
       this.zyraAiAllocation(projectId),
       this.zyraChatProjectSnapshot(projectId),
       this.jiraSnapshot(projectId, mentionedJiraKeys),
       this.db.query("SELECT last_completed_plan FROM zyra_chat_sessions WHERE id = $1", [sessionId]).catch(() => ({ rows: [] as Body[] }))
     ]);
-    const knowledge = ragKnowledge.length ? ragKnowledge : knowledgeFallback;
+    const knowledge = [...folderKnowledge, ...(ragKnowledge.length ? ragKnowledge : knowledgeFallback)];
     const lastCompletedPlanCount = normalizeJsonArray((lastCompletedPlanRes.rows[0]?.last_completed_plan as Body | undefined)?.testcaseIds).length;
     const key = allocation.key;
     if (!key) {
@@ -6925,6 +6934,57 @@ export class LegacyService implements OnModuleInit {
     return `Uploaded file (.${ext}) — no extractable text is available for this file type; mention that it exists but do not invent its contents.`;
   }
 
+  private extractQuotedPhrases(message: string): string[] {
+    const phrases = new Set<string>();
+    for (const pattern of [/"([^"]{2,80})"/g, /'([^']{2,80})'/g]) {
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(message))) {
+        const value = match[1].trim();
+        if (value) phrases.add(value);
+      }
+    }
+    return Array.from(phrases);
+  }
+
+  // Neither knowledgeSnapshot (recency) nor rag retrieval (embeddings/full-text over document
+  // content) can resolve a request that names a knowledge-base folder directly, e.g. "get details
+  // from knowledge base 'EAD-11215' folder" — so when the message quotes a name or mentions a
+  // Jira-key-shaped token, look it up by folder name and surface its documents/files explicitly.
+  private async knowledgeFolderSnapshot(projectId: string, message: string, jiraKeys: string[]): Promise<Array<{ title: string; content: string }>> {
+    const candidates = Array.from(new Set([...this.extractQuotedPhrases(message), ...jiraKeys])).slice(0, 5);
+    if (!candidates.length) return [];
+    const foldersRes = await this.db.query(
+      `SELECT id, name FROM knowledge_folders WHERE project_id = $1 AND is_deleted = false AND name ILIKE ANY($2::text[]) LIMIT 5`,
+      [projectId, candidates.map((value) => `%${value}%`)]
+    ).catch(() => ({ rows: [] as Body[] }));
+    if (!foldersRes.rows.length) return [];
+
+    const folderIds = foldersRes.rows.map((row) => row.id);
+    const folderNames = foldersRes.rows.map((row) => row.name).join(", ");
+    const [docsRes, filesRes] = await Promise.all([
+      this.db.query(
+        `SELECT title, content_text FROM knowledge_documents WHERE folder_id = ANY($1::uuid[]) AND is_deleted = false ORDER BY updated_at DESC LIMIT 12`,
+        [folderIds]
+      ).catch(() => ({ rows: [] as Body[] })),
+      this.db.query(
+        `SELECT original_file_name, file_extension, extracted_text, extraction_status FROM knowledge_files WHERE folder_id = ANY($1::uuid[]) AND is_deleted = false ORDER BY updated_at DESC LIMIT 8`,
+        [folderIds]
+      ).catch(() => ({ rows: [] as Body[] }))
+    ]);
+    const documents = docsRes.rows.map((row) => ({
+      title: row.title || "Knowledge base item",
+      content: String(row.content_text || "").slice(0, 1500)
+    }));
+    const files = filesRes.rows.map((row) => ({
+      title: row.original_file_name || "Uploaded file",
+      content: row.extracted_text ? String(row.extracted_text).slice(0, 1500) : this.knowledgeFileFallbackContent(row.file_extension, row.extraction_status)
+    }));
+    if (!documents.length && !files.length) {
+      return [{ title: `Knowledge base folder: ${folderNames}`, content: "This folder was found by name but currently has no documents or files in it." }];
+    }
+    return [{ title: `Knowledge base folder: ${folderNames}`, content: "" }, ...documents, ...files];
+  }
+
   private async existingTestcaseSnapshot(
     projectId: string,
     story: string,
@@ -6976,8 +7036,10 @@ export class LegacyService implements OnModuleInit {
     );
 
     const missingKeys = selectedKeys.filter((key) => !byKey.has(key));
+    let jiraConnected = true;
     if (missingKeys.length) {
       const connection = await this.getJiraConnection(projectId, true).catch(() => null);
+      jiraConnected = Boolean(connection);
       if (connection) {
         const { baseUrl, headers } = this.jiraBaseUrlAndAuth(connection);
         for (const key of missingKeys) {
@@ -7035,7 +7097,9 @@ export class LegacyService implements OnModuleInit {
     return selectedKeys.map((key) => byKey.get(key) || {
       key,
       summary: "Selected Jira ticket",
-      description: "Ticket details were not available from the local cache or Jira API, but the selected key was included for Zyra context."
+      description: jiraConnected
+        ? "This key was not found in the local Jira cache or via the live Jira API — it may not exist, or may belong to a project this Jira connection cannot access."
+        : "Jira is not connected for this project, so this key could not be looked up. Tell the user Jira isn't connected (Project Settings → Integrations → Jira) rather than implying the ticket itself is missing."
     });
   }
 
@@ -7594,6 +7658,7 @@ export class LegacyService implements OnModuleInit {
           externalIds: externalIds.length ? externalIds.slice(0, 200) : undefined,
           testcaseIds: testcaseIds.length ? testcaseIds.slice(0, 200) : undefined,
           allExisting: op?.allExisting === true,
+          fromLastPlan: op?.fromLastPlan === true,
           suiteName: op?.suiteName ? String(op.suiteName).trim().slice(0, 128) : undefined,
           suiteId: op?.suiteId ? String(op.suiteId).trim() : undefined,
           draft: op?.draft && typeof op.draft === "object" ? op.draft : undefined,
@@ -7604,7 +7669,7 @@ export class LegacyService implements OnModuleInit {
       .filter((op) => {
         if (op.type === "create") return !!op.draft;
         if (op.type === "create_suite") return !!op.suiteName;
-        if (op.type === "move_to_suite") return (!!op.suiteName || !!op.suiteId) && (op.allExisting || !!op.externalIds?.length || !!op.testcaseIds?.length);
+        if (op.type === "move_to_suite") return (!!op.suiteName || !!op.suiteId) && (op.allExisting || op.fromLastPlan || !!op.externalIds?.length || !!op.testcaseIds?.length);
         return op.testcaseId || op.externalId; // update / archive
       })
       .slice(0, 10);
@@ -7671,7 +7736,13 @@ export class LegacyService implements OnModuleInit {
     const archiveWords = /\b(remove|delete|archive|drop|deprecate)\b/.test(lower);
     const listWords = /\b(show|list|which|what|find|display|compare|covered|covers|coverage|existing)\b/.test(lower);
     const exampleWords = /\b(example|sample|explain|how|why|what is|what are|walk me|describe)\b/.test(lower);
-    const suiteWords = /\b(suite|suites|folder|folders)\b/.test(lower);
+    // "folder" alone is ambiguous — it means a testcase suite/folder in "create a suite/folder"
+    // phrasing, but means a knowledge-base folder in "knowledge base 'X' folder" phrasing. Only
+    // count folder/folders as a suite word when the message isn't talking about the knowledge base,
+    // so "get details from knowledge base 'EAD-11215' folder and create the test cases" is not
+    // misrouted to the suite intent and away from the create-testcases path.
+    const knowledgeBaseWords = /\bknowledge\s*base\b/.test(lower);
+    const suiteWords = /\b(suite|suites)\b/.test(lower) || (/\b(folder|folders)\b/.test(lower) && !knowledgeBaseWords);
     const moveWords = /\b(move|moved|moving|assign|assigned|organi[sz]e|organi[sz]ed|group|grouped|regroup|categori[sz]e|reorgani[sz]e)\b/.test(lower);
     // Analysis/review framing: user wants to UNDERSTAND gaps, not generate right now.
     // e.g. "review KB and let me know what gaps we need to generate" → list/answer, not create.

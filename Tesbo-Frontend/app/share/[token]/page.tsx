@@ -100,11 +100,13 @@ function RunStatusBadge({ status }: { status: string }) {
 function MetricCard({
   label,
   value,
+  percent,
   color,
   icon,
 }: {
   label: string;
   value: number;
+  percent?: number;
   color: string;
   icon: React.ReactNode;
 }) {
@@ -114,7 +116,12 @@ function MetricCard({
         {icon}
       </div>
       <div>
-        <p className="text-2xl font-bold text-[var(--foreground)]">{value}</p>
+        <p className="text-2xl font-bold text-[var(--foreground)]">
+          {value}
+          {typeof percent === "number" && (
+            <span className="ml-1 text-sm font-normal text-[var(--muted)]">({percent}%)</span>
+          )}
+        </p>
         <p className="text-xs text-[var(--muted)]">{label}</p>
       </div>
     </div>
@@ -153,6 +160,8 @@ export default function PublicSharedRunPage() {
     const pending = executions.filter((e) => e.status === "Untested" || e.status === "Retest").length;
     return { total, passed, failed, skipped, blocked, pending };
   }, [executions]);
+
+  const pct = (n: number) => (stats.total ? Math.round((n / stats.total) * 100) : 0);
 
   const chartData = useMemo(
     () => [
@@ -253,6 +262,7 @@ export default function PublicSharedRunPage() {
             <MetricCard
               label="Passed"
               value={stats.passed}
+              percent={pct(stats.passed)}
               color="bg-green-50 text-green-600"
               icon={
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -263,6 +273,7 @@ export default function PublicSharedRunPage() {
             <MetricCard
               label="Failed"
               value={stats.failed}
+              percent={pct(stats.failed)}
               color="bg-red-50 text-red-600"
               icon={
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -273,6 +284,7 @@ export default function PublicSharedRunPage() {
             <MetricCard
               label="Skipped"
               value={stats.skipped}
+              percent={pct(stats.skipped)}
               color="bg-yellow-50 text-yellow-600"
               icon={
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -281,8 +293,20 @@ export default function PublicSharedRunPage() {
               }
             />
             <MetricCard
+              label="Blocked"
+              value={stats.blocked}
+              percent={pct(stats.blocked)}
+              color="bg-orange-50 text-orange-600"
+              icon={
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636a9 9 0 11-12.728 0M12 3v9" />
+                </svg>
+              }
+            />
+            <MetricCard
               label="Pending"
               value={stats.pending}
+              percent={pct(stats.pending)}
               color="bg-[var(--surface-secondary)] text-[var(--muted)]"
               icon={
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -302,7 +326,7 @@ export default function PublicSharedRunPage() {
                   <div key={d.label} className="flex items-center gap-1.5 text-xs">
                     <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.color }} />
                     <span className="text-[var(--muted)]">
-                      {d.label} ({d.value})
+                      {d.label} ({d.value}, {pct(d.value)}%)
                     </span>
                   </div>
                 ))}

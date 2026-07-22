@@ -49,9 +49,13 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onImported: (result: ImportResult) => void;
+  // The suite the user was browsing when they opened Import, if any — used as the fallback
+  // parent when a row leaves "Suite Name" blank (matching how "Add test case" already defaults
+  // to the currently open suite instead of always landing rows at the root).
+  defaultSuiteId?: string;
 }
 
-export default function ImportTestCasesModal({ projectId, open, onClose, onImported }: Props) {
+export default function ImportTestCasesModal({ projectId, open, onClose, onImported, defaultSuiteId }: Props) {
   const [step, setStep] = useState<ImportStep>("upload");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -101,8 +105,8 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
       severity: ["severity"],
       type: ["type", "testtype", "casetype"],
       status: ["status", "state"],
-      suite: ["suite", "folder", "module"],
-      component: ["component", "feature", "area"],
+      suite: ["suite", "suitename", "folder", "foldername", "module", "modulename"],
+      component: ["component", "componentname", "subfolder", "subfoldername", "feature", "area"],
       estimatedDuration: ["estimatedduration", "duration", "estimate"],
     };
     for (const field of IMPORTABLE_FIELDS) {
@@ -222,20 +226,44 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
       }
       const importTitles = new Set<string>();
       const suiteByName = new Map<string, string>();
+      // Suites a new child got created under during this run — the caller expands these in
+      // the suite tree afterward so an imported subfolder isn't left collapsed and unnoticed.
+      const expandSuiteIds = new Set<string>();
+      const suiteKey = (name: string, parentId: string | undefined) => `${parentId ?? "root"}::${normalizeSuiteName(name)}`;
       if (mapping.suite != null) {
         const existingSuites = await listSuites(projectId);
         for (const suite of existingSuites) {
-          suiteByName.set(normalizeSuiteName(suite.name), suite.id);
+          suiteByName.set(suiteKey(suite.name, suite.parentId ?? undefined), suite.id);
         }
       }
-      const resolveSuiteId = async (suiteName: string) => {
+      const resolveSuiteId = async (suiteName: string, parentId: string | undefined) => {
         const normalized = normalizeSuiteName(suiteName);
-        if (!normalized) return undefined;
-        const existingSuiteId = suiteByName.get(normalized);
+        if (!normalized) return parentId;
+        const cacheKey = suiteKey(suiteName, parentId);
+        const existingSuiteId = suiteByName.get(cacheKey);
         if (existingSuiteId) return existingSuiteId;
-        const suite = await createSuite(projectId, { name: suiteName.trim() });
-        suiteByName.set(normalized, suite.id);
+        const suite = await createSuite(projectId, { name: suiteName.trim(), parentId });
+        suiteByName.set(cacheKey, suite.id);
+        if (parentId) expandSuiteIds.add(parentId);
         return suite.id;
+      };
+      // "Suite Name" resolves the top-level suite; "Component Name" (when mapped)
+      // resolves/creates a child suite (subfolder) nested under it. A row that leaves "Suite
+      // Name" blank falls back to whatever suite the user was browsing when they opened
+      // Import (defaultSuiteId) instead of dropping the row at the root — matching how "Add
+      // test case" already defaults to the currently open suite.
+      const resolveTestCaseSuiteId = async (suiteName: string, componentName: string) => {
+        if (!suiteName) {
+          if (!defaultSuiteId) return undefined;
+          if (!componentName) return defaultSuiteId;
+          expandSuiteIds.add(defaultSuiteId);
+          return resolveSuiteId(componentName, defaultSuiteId);
+        }
+        let suiteId = await resolveSuiteId(suiteName, undefined);
+        if (componentName) {
+          suiteId = await resolveSuiteId(componentName, suiteId);
+        }
+        return suiteId;
       };
       for (const [index, row] of activeSheet.rows.entries()) {
         const valueFor = (field: string) => {
@@ -259,14 +287,20 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
         importTitles.add(normalizedTitle);
         const stepsText = valueFor("steps");
         const steps = stepsText
-          ? stepsText.split(/\r?\n|(?:\s*\|\s*)/).map((part, stepIndex) => ({
-              stepNumber: stepIndex + 1,
-              action: part.trim(),
-              expectedResult: "",
-            })).filter((step) => step.action)
+          // Each step segment may embed its expected result as "action => expected result" —
+          // the same convention Tesbo's own export uses (see exportTestCases on the backend) —
+          // so re-importing an exported file round-trips expected results instead of dropping them.
+          ? stepsText.split(/\r?\n|(?:\s*\|\s*)/).map((part, stepIndex) => {
+              const [actionPart, ...resultParts] = part.split(/\s*=>\s*/);
+              return {
+                stepNumber: stepIndex + 1,
+                action: (actionPart || "").trim(),
+                expectedResult: resultParts.join(" => ").trim(),
+              };
+            }).filter((step) => step.action)
           : [];
         try {
-          const suiteId = await resolveSuiteId(valueFor("suite"));
+          const suiteId = await resolveTestCaseSuiteId(valueFor("suite"), valueFor("component"));
           await createTestCase(projectId, {
             title,
             description: valueFor("description"),
@@ -289,7 +323,7 @@ export default function ImportTestCasesModal({ projectId, open, onClose, onImpor
           });
         }
       }
-      const res = { imported, errors, total: activeSheet.totalRows };
+      const res = { imported, errors, total: activeSheet.totalRows, expandSuiteIds: Array.from(expandSuiteIds) };
       setResult(res);
       setStep("result");
       onImported(res);

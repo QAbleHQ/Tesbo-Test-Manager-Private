@@ -160,13 +160,24 @@ export default function ProjectDashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Reset for the new projectId — otherwise navigating from one project's dashboard straight
+    // to another's (the whole project card is a single Link) reuses this same mounted page
+    // instance, and stale project/summary from the previous project would render underneath —
+    // or, if the previous project's request settles after this one starts, its .then/.catch
+    // would clobber state that belongs to the new project. `cancelled` guards against that race.
+    let cancelled = false;
+    setLoading(true);
+    setProject(null);
+    setSummary(null);
     authMe().then((me) => {
+      if (cancelled) return;
       if (!me) {
         router.replace("/login");
         return;
       }
       getProject(projectId)
         .then((p) => {
+          if (cancelled) return undefined;
           setProject(p);
           return Promise.all([
             getProjectDashboardSummary(projectId),
@@ -174,14 +185,23 @@ export default function ProjectDashboardPage() {
             listActivity(projectId, { limit: 10 }),
           ]);
         })
-        .then(([summaryRes, cyclesRes, activityRes]) => {
+        .then((res) => {
+          if (cancelled || !res) return;
+          const [summaryRes, cyclesRes, activityRes] = res;
           setSummary(summaryRes);
           setRuns(cyclesRes.slice(0, 4));
           setActivities(activityRes.list);
         })
-        .catch(() => router.replace("/projects"))
-        .finally(() => setLoading(false));
+        .catch(() => {
+          if (!cancelled) router.replace("/projects");
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [projectId, router]);
 
   if (loading || !project || !summary) {

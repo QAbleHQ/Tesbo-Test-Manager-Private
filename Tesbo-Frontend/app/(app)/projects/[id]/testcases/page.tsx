@@ -62,6 +62,7 @@ const TESTCASE_TYPES = [
   "Functional", "Regression", "Smoke", "Sanity", "Integration",
   "API", "UI", "Performance", "Security",
 ];
+const TESTCASE_AUTOMATION_TYPES = ["Automated", "Not Automated", "Can't Automate"];
 
 type Step = { stepNumber?: number; action?: string; expectedResult?: string };
 type PanelMode = "closed" | "edit" | "create";
@@ -94,6 +95,12 @@ function statusTone(s: string) {
 function priorityTone(p: string) {
   if (p === "P0") return "error" as const;
   if (p === "P1") return "warning" as const;
+  return "neutral" as const;
+}
+
+function automationTone(a: string) {
+  if (a === "Automated") return "success" as const;
+  if (a === "Can't Automate") return "error" as const;
   return "neutral" as const;
 }
 
@@ -155,6 +162,7 @@ export default function TestCasesPage() {
   const [type, setType] = useState("Functional");
   const [priority, setPriority] = useState("P2");
   const [status, setStatus] = useState("Draft");
+  const [automationStatus, setAutomationStatus] = useState("Not Automated");
   const [suiteId, setSuiteId] = useState("");
   const [defaultTestcaseIdPrefix, setDefaultTestcaseIdPrefix] = useState("TC");
   const [testcaseIdPrefix, setTestcaseIdPrefix] = useState("TC");
@@ -168,6 +176,7 @@ export default function TestCasesPage() {
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkStatus, setBulkStatus] = useState("Draft");
   const [bulkPriority, setBulkPriority] = useState("P2");
+  const [bulkAutomationStatus, setBulkAutomationStatus] = useState("Not Automated");
   const [bulkTargetSuiteId, setBulkTargetSuiteId] = useState("");
 
   const [deleteSuiteId, setDeleteSuiteId] = useState<string | null>(null);
@@ -182,6 +191,7 @@ export default function TestCasesPage() {
   const [suiteStatusFilter, setSuiteStatusFilter] = useState("all");
   const [suitePriorityFilter, setSuitePriorityFilter] = useState("all");
   const [suiteTypeFilter, setSuiteTypeFilter] = useState("all");
+  const [suiteAutomationFilter, setSuiteAutomationFilter] = useState("all");
   const [debouncedSuiteSearch, setDebouncedSuiteSearch] = useState("");
 
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -271,6 +281,7 @@ export default function TestCasesPage() {
     suiteStatusFilter !== "all",
     suitePriorityFilter !== "all",
     suiteTypeFilter !== "all",
+    suiteAutomationFilter !== "all",
     activeJiraIssueKey !== "",
   ].filter(Boolean).length;
   const totalPages = Math.max(1, Math.ceil(suiteCasesTotal / pageSize));
@@ -315,6 +326,7 @@ export default function TestCasesPage() {
     suiteStatusFilter,
     suitePriorityFilter,
     suiteTypeFilter,
+    suiteAutomationFilter,
     activeJiraIssueKey,
     pageSize,
   ]);
@@ -330,6 +342,7 @@ export default function TestCasesPage() {
         status: suiteStatusFilter === "all" ? undefined : suiteStatusFilter,
         priority: suitePriorityFilter === "all" ? undefined : suitePriorityFilter,
         type: suiteTypeFilter === "all" ? undefined : suiteTypeFilter,
+        automationStatus: suiteAutomationFilter === "all" ? undefined : suiteAutomationFilter,
         jiraIssueKey: activeJiraIssueKey || undefined,
         linearIssueKey: activeLinearIssueKey || undefined,
         search: debouncedSuiteSearch || undefined,
@@ -352,6 +365,7 @@ export default function TestCasesPage() {
     suitePriorityFilter,
     suiteStatusFilter,
     suiteTypeFilter,
+    suiteAutomationFilter,
     activeJiraIssueKey,
     activeLinearIssueKey,
     pageSize,
@@ -388,6 +402,7 @@ export default function TestCasesPage() {
     setType((data.type as string) ?? "Functional");
     setPriority((data.priority as string) ?? "P2");
     setStatus((data.status as string) ?? "Draft");
+    setAutomationStatus((data.automationStatus as string) ?? "Not Automated");
     setSuiteId((data.suiteId as string) ?? activeSuiteId ?? "");
     setPanelJiraIssueKey((data.jiraIssueKey as string) ?? "");
     setPanelJiraUrl((data.jiraUrl as string) ?? "");
@@ -404,6 +419,7 @@ export default function TestCasesPage() {
     setType("Functional");
     setPriority("P2");
     setStatus("Draft");
+    setAutomationStatus("Not Automated");
     setSuiteId(defaultSuiteId ?? activeSuiteId ?? "");
     setTestcaseIdPrefix(defaultTestcaseIdPrefix);
     setPanelJiraIssueKey("");
@@ -453,6 +469,7 @@ export default function TestCasesPage() {
     setSuiteStatusFilter("all");
     setSuitePriorityFilter("all");
     setSuiteTypeFilter("all");
+    setSuiteAutomationFilter("all");
     setSuiteCasesPage(1);
     if (activeJiraIssueKey) router.replace(`/projects/${projectId}/testcases`);
   }
@@ -497,6 +514,7 @@ export default function TestCasesPage() {
     setBulkTargetSuiteId("");
     setBulkStatus("Draft");
     setBulkPriority("P2");
+    setBulkAutomationStatus("Not Automated");
     setIsBulkActionModalOpen(true);
   }
 
@@ -522,6 +540,7 @@ export default function TestCasesPage() {
           testcaseIds: selectedCaseIds,
           status: bulkStatus,
           priority: bulkPriority,
+          automationStatus: bulkAutomationStatus,
         });
       } else if (bulkAction === "move") {
         await bulkUpdateTestCases(projectId, {
@@ -685,6 +704,7 @@ export default function TestCasesPage() {
           type,
           priority,
           status,
+          automationStatus,
           testcaseIdPrefix,
         });
         setSuiteCasesPage(1);
@@ -693,6 +713,7 @@ export default function TestCasesPage() {
         setSuiteStatusFilter("all");
         setSuitePriorityFilter("all");
         setSuiteTypeFilter("all");
+        setSuiteAutomationFilter("all");
         await refreshData(1);
         setPanelSuccess("Test case created successfully.");
         setTimeout(() => setPanelSuccess(null), 4000);
@@ -714,6 +735,7 @@ export default function TestCasesPage() {
           type,
           priority,
           status,
+          automationStatus,
         });
         setPanelSuccess("Test case updated successfully.");
         setTimeout(() => setPanelSuccess(null), 4000);
@@ -1176,6 +1198,16 @@ export default function TestCasesPage() {
                         <IconX size={11} stroke={2.5} />
                       </button>
                     )}
+                    {suiteAutomationFilter !== "all" && (
+                      <button
+                        type="button"
+                        onClick={() => setSuiteAutomationFilter("all")}
+                        className="inline-flex items-center gap-1 rounded-full bg-[var(--brand-soft)] py-[3px] pl-2 pr-2.5 text-[11.5px] font-medium text-[var(--brand-primary)] hover:opacity-80"
+                      >
+                        <span className="text-[var(--muted)]">Automation:</span> {suiteAutomationFilter}
+                        <IconX size={11} stroke={2.5} />
+                      </button>
+                    )}
                     {activeJiraIssueKey && (
                       <button
                         type="button"
@@ -1226,7 +1258,17 @@ export default function TestCasesPage() {
                         <option key={option} value={option}>{option}</option>
                       ))}
                     </select>
-                    {/* Columns control renders here (portaled from the table), as the 4th dropdown. */}
+                    <select
+                      value={suiteAutomationFilter}
+                      onChange={(e) => setSuiteAutomationFilter(e.target.value)}
+                      className="h-[30px] rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 text-[12px] text-[var(--ink-600)] outline-none"
+                    >
+                      <option value="all">All automation types</option>
+                      {TESTCASE_AUTOMATION_TYPES.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                    {/* Columns control renders here (portaled from the table), as the 5th dropdown. */}
                     <div ref={setColumnsSlotEl} className="flex items-center empty:hidden" />
                     {activeFilterCount > 0 && (
                       <button
@@ -1391,6 +1433,7 @@ export default function TestCasesPage() {
                   <div className="mt-1.5 flex flex-wrap items-center gap-2">
                     {status && <StatusChip tone={statusTone(status)}>{status}</StatusChip>}
                     {priority && <StatusChip tone={priorityTone(priority)}>{priority}</StatusChip>}
+                    {automationStatus && <StatusChip tone={automationTone(automationStatus)}>{automationStatus}</StatusChip>}
                     {panelJiraIssueKey && (
                       <StatusChip tone="info">
                         <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" fill="currentColor" aria-hidden="true">
@@ -1517,6 +1560,12 @@ export default function TestCasesPage() {
                           </Select>
                         </Field>
                         <Field>
+                          <FieldLabel>Automation Type</FieldLabel>
+                          <Select value={automationStatus} onChange={(e) => setAutomationStatus(e.target.value)}>
+                            {TESTCASE_AUTOMATION_TYPES.map((a) => <option key={a} value={a}>{a}</option>)}
+                          </Select>
+                        </Field>
+                        <Field>
                           <FieldLabel>Estimated Duration</FieldLabel>
                           <Input type="text" value={estimatedDuration} onChange={(e) => setEstimatedDuration(e.target.value)} placeholder="e.g. 10 min" />
                         </Field>
@@ -1612,6 +1661,12 @@ export default function TestCasesPage() {
                               <FieldLabel>Status</FieldLabel>
                               <Select value={status} onChange={(e) => setStatus(e.target.value)}>
                                 {TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                              </Select>
+                            </Field>
+                            <Field>
+                              <FieldLabel>Automation Type</FieldLabel>
+                              <Select value={automationStatus} onChange={(e) => setAutomationStatus(e.target.value)}>
+                                {TESTCASE_AUTOMATION_TYPES.map((a) => <option key={a} value={a}>{a}</option>)}
                               </Select>
                             </Field>
                             <Field>
@@ -1822,7 +1877,7 @@ export default function TestCasesPage() {
           >
             <option value="">Select an action…</option>
             <option value="move">Move to suite</option>
-            <option value="update">Update status / priority</option>
+            <option value="update">Update status / priority / automation type</option>
             <option value="archive">Archive</option>
             <option value="delete">Delete</option>
           </Select>
@@ -1855,6 +1910,12 @@ export default function TestCasesPage() {
               <FieldLabel>Priority</FieldLabel>
               <Select value={bulkPriority} onChange={(e) => setBulkPriority(e.target.value)}>
                 {TESTCASE_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel>Automation Type</FieldLabel>
+              <Select value={bulkAutomationStatus} onChange={(e) => setBulkAutomationStatus(e.target.value)}>
+                {TESTCASE_AUTOMATION_TYPES.map((a) => <option key={a} value={a}>{a}</option>)}
               </Select>
             </Field>
           </div>
@@ -1942,10 +2003,14 @@ export default function TestCasesPage() {
         projectId={projectId}
         open={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
+        defaultSuiteId={activeSuiteId ?? undefined}
         onImported={(result) => {
           if (result.imported > 0) {
             void loadData();
             void loadSelectedSuiteCases();
+          }
+          if (result.expandSuiteIds?.length) {
+            setExpandedSuiteIds((prev) => new Set([...prev, ...result.expandSuiteIds!]));
           }
           showImportToast(
             result.errors.length > 0

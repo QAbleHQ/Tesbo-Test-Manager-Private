@@ -15,7 +15,8 @@ export type RepoTcColumnId =
   | "priority"
   | "status"
   | "updated"
-  | "type";
+  | "type"
+  | "automation";
 
 type RepoDataColumnId = Exclude<RepoTcColumnId, "select">;
 
@@ -28,6 +29,7 @@ const DATA_COLUMN_IDS: RepoDataColumnId[] = [
   "status",
   "updated",
   "type",
+  "automation",
 ];
 
 const COLUMN_LABELS: Record<RepoTcColumnId, string> = {
@@ -40,6 +42,7 @@ const COLUMN_LABELS: Record<RepoTcColumnId, string> = {
   status: "Status",
   updated: "Updated",
   type: "Type",
+  automation: "Automation Type",
 };
 
 const FIELD_IDS: Record<RepoDataColumnId, string> = {
@@ -51,6 +54,7 @@ const FIELD_IDS: Record<RepoDataColumnId, string> = {
   status: "status",
   updated: "updated",
   type: "type",
+  automation: "automationStatus",
 };
 
 const DEFAULT_DATA_ORDER: RepoDataColumnId[] = [
@@ -60,6 +64,7 @@ const DEFAULT_DATA_ORDER: RepoDataColumnId[] = [
   "jira",
   "priority",
   "type",
+  "automation",
   "status",
   "updated",
 ];
@@ -73,6 +78,7 @@ const DEFAULT_VISIBLE: Record<RepoDataColumnId, boolean> = {
   status: true,
   updated: true,
   type: true,
+  automation: true,
 };
 
 const DEFAULT_WIDTHS: Record<RepoTcColumnId, number> = {
@@ -85,6 +91,7 @@ const DEFAULT_WIDTHS: Record<RepoTcColumnId, number> = {
   status: 112,
   updated: 108,
   type: 120,
+  automation: 136,
 };
 
 const MIN_WIDTHS: Record<RepoTcColumnId, number> = {
@@ -97,6 +104,7 @@ const MIN_WIDTHS: Record<RepoTcColumnId, number> = {
   status: 88,
   updated: 96,
   type: 88,
+  automation: 96,
 };
 
 const MAX_WIDTH = 560;
@@ -113,6 +121,12 @@ function repoPriorityTone(priority: string) {
   if (priority === "P0") return "error" as const;
   if (priority === "P1") return "warning" as const;
   if (priority === "P2") return "confidenceHigh" as const;
+  return "neutral" as const;
+}
+
+function repoAutomationTone(automationStatus: string) {
+  if (automationStatus === "Automated") return "success" as const;
+  if (automationStatus === "Can't Automate") return "error" as const;
   return "neutral" as const;
 }
 
@@ -538,6 +552,17 @@ export function RepositoryTestCaseTable({
         return (
           <td key={col} style={tdStyle} className={`${cellClass} text-[11px] text-[var(--muted)]`}>
             <span className={innerTruncate}>{tc.type}</span>
+          </td>
+        );
+      case "automation":
+        return (
+          <td key={col} style={tdStyle} className={cellClass}>
+            <StatusChip
+              tone={repoAutomationTone(tc.automationStatus)}
+              className="max-w-full !px-[9px] !py-[2px] !text-[11px] !font-medium"
+            >
+              <span className={innerTruncate}>{tc.automationStatus}</span>
+            </StatusChip>
           </td>
         );
       default:

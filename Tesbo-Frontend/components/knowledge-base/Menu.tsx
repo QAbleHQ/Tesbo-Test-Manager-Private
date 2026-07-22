@@ -49,12 +49,27 @@ export function Menu({
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
   return (
     <div className="inline-block" ref={triggerRef}>
       <div
         role="button"
         tabIndex={0}
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => {
+          // Stop here so a trigger nested in a clickable row (e.g. a folder-tree node) never
+          // needs its own stopPropagation to keep this click from also selecting the row —
+          // and, more importantly, so it can't accidentally swallow this handler's own toggle.
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
