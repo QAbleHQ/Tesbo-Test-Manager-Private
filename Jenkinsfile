@@ -1,6 +1,13 @@
-// Auto-deploy ONLY on push to main (GitHub webhook).
-// testman → ssh tesbo → git pull + docker compose up --build -d
-// Never: docker compose down -v
+// Auto-deploy on main + SonarQube scan before deploy.
+// Sonar secrets: Jenkins Managed file id = tesbo-test-manager-env
+// Sonar failure does NOT block deploy (catchError).
+ //
+ // Low-downtime deploy:
+ //   - NEVER `docker compose down` (that kills the whole site during build)
+ //   - Build images first while old containers keep serving traffic
+ //   - Then `up -d` swaps only changed services (postgres/redis usually stay up)
+ //   - Expect a short blip (few seconds) when frontend/backend containers recreate
+ // Never: docker compose down -v
 
 pipeline {
   agent any
@@ -25,7 +32,37 @@ pipeline {
         checkout scm
         script {
           env.GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-          echo "Auto-deploy ${env.GIT_SHA} → ${env.DEPLOY_USER}@${env.DEPLOY_HOST}:${env.DEPLOY_PATH}"
+          echo "Pipeline ${env.GIT_SHA} → deploy ${env.DEPLOY_USER}@${env.DEPLOY_HOST}:${env.DEPLOY_PATH}"
+        }
+      }
+    }
+
+    stage('SonarQube') {
+      steps {
+        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+          configFileProvider([
+            configFile(fileId: 'tesbo-test-manager-env', variable: 'TESBO_ENV_FILE')
+          ]) {
+            sh '''
+              set -eu
+              set -a
+              # shellcheck disable=SC1090
+              . "$TESBO_ENV_FILE"
+              set +a
+
+              test -n "${SONAR_HOST_URL:-}" || { echo "SONAR_HOST_URL missing in tesbo-test-manager-env"; exit 1; }
+              test -n "${SONAR_TOKEN:-}" || { echo "SONAR_TOKEN missing in tesbo-test-manager-env"; exit 1; }
+
+              echo "==> SonarQube scan → ${SONAR_HOST_URL}"
+              docker run --rm \
+                -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
+                -e SONAR_TOKEN="${SONAR_TOKEN}" \
+                -v "${WORKSPACE}:/usr/src" \
+                -w /usr/src \
+                sonarsource/sonar-scanner-cli:11 \
+                -Dsonar.projectBaseDir=/usr/src
+            '''
+          }
         }
       }
     }
@@ -38,7 +75,6 @@ pipeline {
           echo "==> Jenkins user: $(whoami)"
           ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" "hostname && pwd"
 
-          # One remote script string — no heredoc, no COMPOSE variable
           ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" "
             set -e
             cd ${DEPLOY_PATH}
@@ -47,11 +83,17 @@ pipeline {
             git checkout -f main
             git reset --hard origin/main
             git log -1 --oneline
-            docker compose down
-            docker compose up --build -d
-            sleep 15
+
+            echo '==> Building images (site stays UP)'
+            docker compose build
+
+            echo '==> Rolling containers (no full down)'
+            docker compose up -d --remove-orphans
+
+            sleep 20
             docker compose ps
             curl -fsS http://127.0.0.1:1011/health || true
+            curl -fsS -o /dev/null -w 'frontend_local:%{http_code}\\n' http://127.0.0.1:1010/ || true
             echo Deploy finished
           "
         '''
@@ -72,10 +114,13 @@ pipeline {
 
   post {
     success {
-      echo "Auto-deploy OK: ${env.GIT_SHA} → https://app.tesbo.io/projects"
+      echo "OK: ${env.GIT_SHA} deploy → https://app.tesbo.io/projects"
+    }
+    unstable {
+      echo "Deploy may have succeeded but Sonar was UNSTABLE."
     }
     failure {
-      echo "Auto-deploy failed. Check: ssh tesbo 'cd /opt/tesbo-test-manager/Tesbo-Test-Manager && docker compose ps'"
+      echo "Failed. Check deploy/SSH on tesbo."
     }
   }
 }
